@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>RC LAB 3D — Suite Científica Experimental</title>
+  <link rel="stylesheet" href="css/styles.css">
+  
+  <!-- Dependencias JavaScript Offline Locales -->
+  <script src="js/vendor/three.min.js"></script>
+  <script src="js/vendor/OrbitControls.js"></script>
+  <script src="js/vendor/plotly.min.js"></script>
+</head>
+<body>
+
+  <!-- BARRA SUPERIOR AUTORITATIVA -->
+  <header class="topbar">
+    <div class="brand-section">
+      <div class="brand-badge">UDES</div>
+      <div>
+        <div class="brand-title">RC LAB 3D</div>
+        <div class="brand-subtitle">Plataforma de Instrumentación y Control</div>
+      </div>
+    </div>
+
+    <div class="controls-section">
+      <!-- Selector de Puerto COM -->
+      <select id="com-port-select" class="select-custom" title="Seleccionar puerto COM físico"></select>
+      <button id="btn-refresh-ports" class="btn" title="Refrescar puertos detectados">🔄</button>
+      
+      <!-- Conexión Real Serial -->
+      <button id="btn-connect" class="btn btn-primary">⚡ Conectar USB</button>
+      <button id="btn-disconnect" class="btn btn-danger" style="display:none;">⛔ Desconectar</button>
+      
+      <!-- Emulador Sintético para Pruebas sin Hardware -->
+      <button id="btn-synthetic" class="btn btn-synthetic" title="Iniciar emulador sintético sin Arduino">🧪 Modo Test</button>
+
+      <!-- Badge de Estado -->
+      <div class="status-badge">
+        <span id="status-indicator-dot" class="status-dot"></span>
+        <span id="status-text-label">DESCONECTADO</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- PESTAÑAS DE NAVEGACIÓN -->
+  <nav class="nav-tabs">
+    <button class="tab-btn active" data-tab="tab-lab">🔬 Laboratorio en Vivo</button>
+    <button class="tab-btn" data-tab="tab-3d">🌐 Circuito 3D</button>
+    <button class="tab-btn" data-tab="tab-charts">📈 Osciloscopio & Gráficas</button>
+    <button class="tab-btn" data-tab="tab-analysis">📐 Ajuste Exponencial & Tau</button>
+    <button class="tab-btn" data-tab="tab-simulator">💻 Simulador RC Aislado</button>
+    <button class="tab-btn" data-tab="tab-sessions">💾 Sesiones & Exportación</button>
+    <button class="tab-btn" data-tab="tab-guide">📖 Guía de Laboratorio</button>
+  </nav>
+
+  <!-- CONTENIDO PRINCIPAL -->
+  <main class="main-content">
+
+    <!-- BARRA DE SESIÓN Y ADQUISICIÓN -->
+    <section class="session-bar">
+      <div class="session-info">
+        <div>Sesión: <strong id="lbl-session-id">NINGUNA</strong></div>
+        <div>Muestras Válidas: <strong id="lbl-valid-samples">0</strong></div>
+        <div>Frecuencia: <strong id="lbl-sample-rate">0.0 Hz</strong></div>
+        <div>Modo Estimado: <strong id="lbl-inferred-mode" style="color:var(--amber-charge)">DESCONOCIDO</strong></div>
+        <div>Última Muestra: <strong id="lbl-time-since-sample">--</strong></div>
+      </div>
+      <div style="display:flex; gap:8px;">
+        <button id="btn-annotate-charge" class="btn" style="border-color:var(--amber-charge); color:var(--amber-charge);">⚡ Marcar Carga</button>
+        <button id="btn-annotate-discharge" class="btn" style="border-color:var(--purple-discharge); color:var(--purple-discharge);">🌀 Marcar Descarga</button>
+        <button id="btn-export-csv" class="btn">📥 CSV</button>
+        <button id="btn-export-json" class="btn">📥 JSON</button>
+        <button id="btn-clear-charts" class="btn btn-danger">🧹 Limpiar Vista</button>
+      </div>
+    </section>
+
+    <!-- TARJETAS DE TELEMETRÍA EN TIEMPO REAL -->
+    <section class="grid-cards">
+      <!-- Voltaje Real A1 -->
+      <div class="telemetry-card card-cyan">
+        <div class="card-header-label">
+          <span>Voltaje Real Filtrado</span>
+          <span class="card-origin-tag">Sensor A1 (α=0.2)</span>
+        </div>
+        <div class="card-value">
+          <span id="val-v-real">0.00</span>
+          <span class="card-unit">V</span>
+        </div>
+        <div class="progress-bar-wrap">
+          <div id="bar-v-real" class="progress-bar-fill"></div>
+        </div>
+        <div class="card-footer-desc" style="margin-top:6px;">
+          Porcentaje de escala: <span id="val-pct-scale">0.0%</span> (0–5V)
+        </div>
+      </div>
+
+      <!-- Curva Objetivo del Controlador -->
+      <div class="telemetry-card card-amber">
+        <div class="card-header-label">
+          <span>Curva Objetivo (Ref)</span>
+          <span class="card-origin-tag">Controlador Firmware</span>
+        </div>
+        <div class="card-value">
+          <span id="val-v-target">0.00</span>
+          <span class="card-unit">V</span>
+        </div>
+        <div class="card-footer-desc">
+          Rampa artificial generada por el bucle de control (±0.01V/15ms).
+        </div>
+      </div>
+
+      <!-- Potenciómetro A0 -->
+      <div class="telemetry-card card-purple">
+        <div class="card-header-label">
+          <span>Límite Potenciómetro</span>
+          <span class="card-origin-tag">Entrada A0</span>
+        </div>
+        <div class="card-value">
+          <span id="val-v-pot">0.00</span>
+          <span class="card-unit">V</span>
+        </div>
+        <div class="card-footer-desc">
+          Tensión de consigna máxima configurada físicamente por A0.
+        </div>
+      </div>
+
+      <!-- Error de Seguimiento -->
+      <div class="telemetry-card card-green">
+        <div class="card-header-label">
+          <span>Error de Seguimiento</span>
+          <span class="card-origin-tag">e(t) = V_real - V_obj</span>
+        </div>
+        <div class="card-value">
+          <span id="val-error-tracking">0.00</span>
+          <span class="card-unit">V</span>
+        </div>
+        <div class="card-footer-desc">
+          Desviación instantánea alimentada al algoritmo PWM.
+        </div>
+      </div>
+
+      <!-- LEDs Físicos Lógicos -->
+      <div class="telemetry-card">
+        <div class="card-header-label">
+          <span>LEDs Virtuales (Umbrales)</span>
+          <span class="card-origin-tag">D2, D3, D4, D5</span>
+        </div>
+        <div class="leds-container">
+          <div class="virtual-led" id="vled-1">
+            <div class="led-bulb"></div>
+            <div class="led-label">1V (D2)</div>
+          </div>
+          <div class="virtual-led" id="vled-2">
+            <div class="led-bulb"></div>
+            <div class="led-label">2V (D3)</div>
+          </div>
+          <div class="virtual-led" id="vled-3">
+            <div class="led-bulb"></div>
+            <div class="led-label">3V (D4)</div>
+          </div>
+          <div class="virtual-led" id="vled-4">
+            <div class="led-bulb"></div>
+            <div class="led-label">4V (D5)</div>
+          </div>
+        </div>
+        <div class="card-footer-desc" style="margin-top:8px;">
+          Reproducción lógica de umbrales del firmware.
+        </div>
+      </div>
+    </section>
+
+    <!-- VISTA 1: LABORATORIO EN VIVO (SPLIT 3D + OSCILOSCOPIO) -->
+    <div id="tab-lab" class="tab-view active">
+      <div class="dashboard-split">
+        <!-- Panel 3D -->
+        <div class="panel-container">
+          <div class="panel-title-bar">
+            <div class="panel-title">🌐 Gemelo Tridimensional del Montaje</div>
+            <span style="font-size:0.75rem; color:var(--text-muted); font-family:var(--font-mono);">Orbita con click izq / Zoom con rueda</span>
+          </div>
+          <div class="topology-warning-banner">
+            ⚠️ ESQUEMA CONCEPTUAL — TOPOLOGÍA EXACTA DE CONEXIONES PENDIENTE DE VERIFICACIÓN FÍSICA
+          </div>
+          <div id="scene3d-canvas"></div>
+        </div>
+
+        <!-- Panel Gráfica Principal -->
+        <div class="panel-container">
+          <div class="panel-title-bar">
+            <div class="panel-title">📈 Curvas Experimentales de Voltaje en Tiempo Real</div>
+            <span style="font-size:0.75rem; color:var(--cyan-primary); font-family:var(--font-mono);">Adquisición Serial 115200</span>
+          </div>
+          <div id="chart-live-voltage" class="chart-plot-area" style="min-height:430px;"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- VISTA 2: CIRCUITO 3D COMPLETO -->
+    <div id="tab-3d" class="tab-view">
+      <div class="panel-container" style="min-height:750px;">
+        <div class="panel-title-bar">
+          <div class="panel-title">🌐 Visualización 3D Interactiva de Componentes</div>
+          <div style="display:flex; gap:10px;">
+            <button id="btn-reset-camera" class="btn">🎥 Reset Cámara</button>
+            <button id="btn-focus-cap" class="btn">🔍 Condensador</button>
+          </div>
+        </div>
+        <div class="topology-warning-banner">
+          ⚠️ C = 1000 µF (0.001 F) nominal 25V. Entrada A1 monitorea el capacitor. PWM D9 comanda el MOSFET.
+        </div>
+        <div id="scene3d-canvas-full" style="width:100%; height:620px; background:#040810; border-radius:8px;"></div>
+      </div>
+    </div>
+
+    <!-- VISTA 3: TODAS LAS GRÁFICAS -->
+    <div id="tab-charts" class="tab-view">
+      <div class="charts-grid">
+        <div class="chart-card">
+          <div class="panel-title">Gráfica A: Voltaje Condensador vs Objetivo</div>
+          <div id="chart-sub-a" class="chart-plot-area"></div>
+        </div>
+        <div class="chart-card">
+          <div class="panel-title">Gráfica B: Potenciómetro A0 & Referencia</div>
+          <div id="chart-sub-b" class="chart-plot-area"></div>
+        </div>
+        <div class="chart-card">
+          <div class="panel-title">Gráfica C: Error de Seguimiento e(t)</div>
+          <div id="chart-sub-c" class="chart-plot-area"></div>
+        </div>
+        <div class="chart-card">
+          <div class="panel-title">Gráfica D: Estimación de Corriente RC</div>
+          <div class="topology-warning-banner" style="margin-top:6px;">
+            ℹ️ ESTIMACIÓN teórica bajo hipótesis RC simple. No constituye medición directa de corriente.
+          </div>
+          <div id="chart-sub-d" class="chart-plot-area"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- VISTA 4: ANÁLISIS MATEMÁTICO & AJUSTE EXPONENCIAL -->
+    <div id="tab-analysis" class="tab-view">
+      <div class="panel-container">
+        <div class="panel-title-bar">
+          <div class="panel-title">📐 Ajuste de Curva Experimental y Estimación de Tau (τ)</div>
+        </div>
+        
+        <div class="form-grid">
+          <div class="form-group">
+            <label>R Resistencia Teórica (Ω)</label>
+            <input type="number" id="inp-fit-r" class="form-input" value="1000" step="10">
+          </div>
+          <div class="form-group">
+            <label>C Capacitancia Teórica (F)</label>
+            <input type="number" id="inp-fit-c" class="form-input" value="0.001" step="0.0001">
+          </div>
+          <div class="form-group">
+            <label>Modo de Ajuste</label>
+            <select id="inp-fit-mode" class="form-input">
+              <option value="AUTO">Detección Automática</option>
+              <option value="CARGA">Fase de Carga</option>
+              <option value="DESCARGA">Fase de Descarga</option>
+            </select>
+          </div>
+          <div class="form-group" style="justify-content:flex-end;">
+            <button id="btn-run-fit" class="btn btn-primary" style="height:38px;">🚀 Ajustar Exponencial</button>
+          </div>
+        </div>
+
+        <div id="fit-results-area" style="display:none; margin-top:16px;">
+          <table class="styled-table">
+            <thead>
+              <tr>
+                <th>Parámetro</th>
+                <th>Valor Experimental</th>
+                <th>Valor Teórico</th>
+                <th>Incertidumbre / Calidad</th>
+              </tr>
+            </thead>
+            <tbody id="fit-table-body"></tbody>
+          </table>
+
+          <div id="fit-warning-box" class="topology-warning-banner" style="display:none;"></div>
+          <div id="chart-fit-comparison" class="chart-plot-area" style="min-height:350px; margin-top:16px;"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- VISTA 5: SIMULADOR INDEPENDIENTE -->
+    <div id="tab-simulator" class="tab-view">
+      <div class="panel-container">
+        <div class="panel-title-bar">
+          <div class="panel-title">💻 Simulador RC Teórico Independiente</div>
+          <span class="card-origin-tag" style="background:var(--amber-charge); color:#000; font-weight:bold;">MODO SIMULACIÓN PURO — NO CONTAMINA DATOS REALES</span>
+        </div>
+
+        <div class="form-grid">
+          <div class="form-group">
+            <label>Modo</label>
+            <select id="sim-mode" class="form-input">
+              <option value="CARGA">Carga Exponencial</option>
+              <option value="DESCARGA">Descarga Exponencial</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Resistencia R (Ω)</label>
+            <input type="number" id="sim-r" class="form-input" value="1000" step="50">
+          </div>
+          <div class="form-group">
+            <label>Capacitancia C (F)</label>
+            <input type="number" id="sim-c" class="form-input" value="0.001" step="0.0001">
+          </div>
+          <div class="form-group">
+            <label>Voltaje Fuente V_s (V)</label>
+            <input type="number" id="sim-vs" class="form-input" value="5.0" step="0.1">
+          </div>
+          <div class="form-group">
+            <label>Voltaje Inicial V_0 (V)</label>
+            <input type="number" id="sim-v0" class="form-input" value="0.0" step="0.1">
+          </div>
+          <div class="form-group">
+            <label>Tiempo Final (s)</label>
+            <input type="number" id="sim-tfinal" class="form-input" value="5.0" step="0.5">
+          </div>
+        </div>
+
+        <button id="btn-run-sim" class="btn btn-primary" style="margin-bottom:16px;">▶ Simular Curvas Ideales</button>
+
+        <div id="chart-simulator-area" class="chart-plot-area" style="min-height:380px;"></div>
+      </div>
+    </div>
+
+    <!-- VISTA 6: HISTORIAL DE SESIONES -->
+    <div id="tab-sessions" class="tab-view">
+      <div class="panel-container">
+        <div class="panel-title-bar">
+          <div class="panel-title">💾 Sesiones de Adquisición Guardadas en Disco</div>
+          <button id="btn-refresh-sessions" class="btn">🔄 Refrescar Lista</button>
+        </div>
+        <div id="sessions-list-container">
+          <p style="color:var(--text-muted); padding:10px;">Cargando sesiones...</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- VISTA 7: GUÍA DE LABORATORIO & REPORTE -->
+    <div id="tab-guide" class="tab-view">
+      <div class="guide-content">
+        <h1>GUÍA EXPERIMENTAL: CIRCUITO RC Y CONTROLADOR EN ARDUINO</h1>
+        <p><strong>Universidad de Santander — UDES | Laboratorio de Física y Circuitos</strong></p>
+        
+        <h2>1. Objetivos del Experimento</h2>
+        <ul>
+          <li>Analizar experimentalmente la respuesta temporal de carga y descarga de un condensador electrolítico C = 1000 µF.</li>
+          <li>Contrastar la respuesta natural pasiva RC frente a una dinámica controlada por firmware con rampa artificial y modulación PWM sobre MOSFET.</li>
+          <li>Calcular la constante de tiempo experimental τ y evaluarla frente al producto nominal R·C.</li>
+          <li>Identificar el impacto del retardo de muestreo (15 ms), la cuantización de 10 bits del ADC y el filtrado digital exponencial (factor α = 0.2).</li>
+        </ul>
+
+        <h2>2. Fundamento Teórico</h2>
+        <p>Un condensador almacena carga eléctrica Q en proporción a la diferencia de potencial V entre sus armaduras:</p>
+        <div class="formula-box">Q = C · V</div>
+        
+        <p>La corriente instantánea corresponde a la tasa de variación de la carga almacenada respecto al tiempo:</p>
+        <div class="formula-box">I(t) = dQ/dt = C · (dV_C / dt)</div>
+
+        <p>Al aplicar la Ley de Mallas de Kirchhoff a un circuito serie simple alimentado con una fuente constante V_s a través de una resistencia R:</p>
+        <div class="formula-box">V_s = R · I(t) + V_C(t) = R · C · (dV_C / dt) + V_C(t)</div>
+
+        <p>Resolviendo la ecuación diferencial ordinaria de primer orden con condición inicial V_C(0) = V_0:</p>
+        <div class="formula-box">
+          <strong>Carga:</strong> V_C(t) = V_s + (V_0 - V_s) · e^(-t / τ)<br>
+          <strong>Descarga (V_s = 0):</strong> V_C(t) = V_0 · e^(-t / τ)<br>
+          <strong>Constante de tiempo:</strong> τ = R · C &nbsp;[segundos]
+        </div>
+
+        <h2>3. Advertencia Crítica sobre el Firmware del Montaje</h2>
+        <div class="topology-warning-banner">
+          ⚠️ <strong>Diferencia Fundamental:</strong> El firmware <code>sketch_oct5a.ino</code> <strong>NO</strong> aplica una señal de escalón simple. El microcontrolador genera una rampa de consigna artificial (<code>Curva_Objetivo</code>) y utiliza un lazo incremental con PWM (pin D9) y MOSFET para obligar a <code>Voltaje_Real</code> a seguir esa rampa. Por consiguiente, la curva resultante no es necesariamente una exponencial libre pura, sino la respuesta del sistema en lazo cerrado con saturación del PWM entre 0 y 255.
+        </div>
+
+        <h2>4. Generación de Reporte Académico</h2>
+        <button id="btn-print-report" class="btn btn-primary" style="margin-top:12px;">🖨️ Imprimir / Guardar Reporte en PDF</button>
+      </div>
+    </div>
+
+  </main>
+
+  <!-- MÓDULOS JAVASCRIPT DE LA APLICACIÓN -->
+  <script src="js/circuit3d.js"></script>
+  <script src="js/charts.js"></script>
+  <script src="js/simulator.js"></script>
+  <script src="js/analysis.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>

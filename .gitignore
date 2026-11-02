@@ -1,0 +1,26 @@
+# Entornos virtuales y cachés de Python
+.venv/
+venv/
+ENV/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# Registros y archivos temporales
+*.log
+*.tmp
+*.bak
+*.swp
+.DS_Store
+Thumbs.db
+
+# Sesiones en escritura atómica (los CSV/JSON definitivos sí se conservan)
+data_sessions/*.tmp
+data_sessions/*.part
+
+# Mapas de depuración de dependencias locales
+frontend/js/vendor/*.map

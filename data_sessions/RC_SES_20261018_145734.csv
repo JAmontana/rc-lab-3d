@@ -1,0 +1,3 @@
+timestamp_host,monotonic_time,tiempo_relativo_s,voltaje_real,curva_objetivo,limite_pot,error_seguimiento,porcentaje_escala,led1,led2,led3,led4,modo_estimado,valida,anomalia
+1792353454.9813,10863.9664,0.0000,0.08,0.02,4.2,0.06,1.6,0,0,0,0,CARGA,1,0
+1792353454.9966,10863.9817,0.0153,0.12,0.03,4.2,0.09,2.4,0,0,0,0,CARGA,1,0

@@ -1,0 +1,80 @@
+{
+  "metadata": {
+    "session_id": "RC_SES_20261018_145734",
+    "created_at_utc": "2026-10-18T19:57:34Z",
+    "device_port": "SINTETICO_TEST_COM",
+    "baudrate": 115200,
+    "origen_datos": "SERIAL",
+    "parametros_circuito": {
+      "capacitancia_nominal_f": 0.001,
+      "capacitancia_medida_f": null,
+      "resistencia_carga_ohm": null,
+      "resistencia_descarga_ohm": null,
+      "fuente_vs_v": 5.0,
+      "origen_capacitancia": "NOMINAL_1000uF",
+      "origen_resistencia_carga": "PENDIENTE_VERIFICAR",
+      "origen_resistencia_descarga": "PENDIENTE_VERIFICAR"
+    },
+    "total_muestras_validas": 2,
+    "total_muestras_invalidas": 0,
+    "anotaciones": [
+      {
+        "timestamp": 1792353454.9895484,
+        "monotonic_time": 10863.9747063,
+        "text": "Test",
+        "categoria": "NOTA"
+      }
+    ],
+    "desconexiones": []
+  },
+  "samples": [
+    {
+      "timestamp_host": 1792353454.9812927,
+      "monotonic_time": 10863.9664491,
+      "limite_pot": 4.2,
+      "voltaje_objetivo": 0.02,
+      "voltaje_real": 0.08,
+      "min_val": 0.0,
+      "max_val": 5.0,
+      "error_seguimiento": 0.06,
+      "porcentaje_escala": 1.6,
+      "led1_logico": false,
+      "led2_logico": false,
+      "led3_logico": false,
+      "led4_logico": false,
+      "modo_estimado": "CARGA",
+      "confianza_modo": 0.66,
+      "origen": "SINTETICO_TEST",
+      "valida": true,
+      "anomalia": false,
+      "mensaje_anomalia": null,
+      "arduino_time_ms": null,
+      "voltaje_adc_raw": null,
+      "pwm_duty": null
+    },
+    {
+      "timestamp_host": 1792353454.99656,
+      "monotonic_time": 10863.9817161,
+      "limite_pot": 4.2,
+      "voltaje_objetivo": 0.03,
+      "voltaje_real": 0.12,
+      "min_val": 0.0,
+      "max_val": 5.0,
+      "error_seguimiento": 0.09,
+      "porcentaje_escala": 2.4,
+      "led1_logico": false,
+      "led2_logico": false,
+      "led3_logico": false,
+      "led4_logico": false,
+      "modo_estimado": "CARGA",
+      "confianza_modo": 0.67,
+      "origen": "SINTETICO_TEST",
+      "valida": true,
+      "anomalia": false,
+      "mensaje_anomalia": null,
+      "arduino_time_ms": null,
+      "voltaje_adc_raw": null,
+      "pwm_duty": null
+    }
+  ]
+}

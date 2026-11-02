@@ -1,0 +1,24 @@
+{
+  "metadata": {
+    "session_id": "RC_SES_20261018_175317",
+    "created_at_utc": "2026-10-18T22:53:17Z",
+    "device_port": "COM3",
+    "baudrate": 115200,
+    "origen_datos": "SERIAL",
+    "parametros_circuito": {
+      "capacitancia_nominal_f": 0.001,
+      "capacitancia_medida_f": null,
+      "resistencia_carga_ohm": null,
+      "resistencia_descarga_ohm": null,
+      "fuente_vs_v": 5.0,
+      "origen_capacitancia": "NOMINAL_1000uF",
+      "origen_resistencia_carga": "PENDIENTE_VERIFICAR",
+      "origen_resistencia_descarga": "PENDIENTE_VERIFICAR"
+    },
+    "total_muestras_validas": 0,
+    "total_muestras_invalidas": 0,
+    "anotaciones": [],
+    "desconexiones": []
+  },
+  "samples": []
+}
