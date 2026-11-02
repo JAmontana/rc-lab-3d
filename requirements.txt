@@ -1,0 +1,11 @@
+# RC LAB 3D — dependencias verificadas en Windows 11 + Python 3.14.5
+# Instalación: python -m venv .venv && .venv\Scripts\python -m pip install -r requirements.txt
+fastapi==0.146.0
+uvicorn==0.54.0
+pydantic==2.14.1
+pyserial==3.5
+websockets==17.2
+numpy==2.4.4
+scipy==1.18.1
+pytest==9.1.1
+httpx==0.28.1

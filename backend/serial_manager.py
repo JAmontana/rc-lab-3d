@@ -1,244 +1,448 @@
 """
-Gestor de comunicación USB Serial con subproceso no bloqueante,
-detección automática de puertos COM, reconexión inteligente,
-soporte para generador sintético de pruebas físicas en ausencia de Arduino real.
+Gestor de comunicación USB serial y emulador de pruebas para RC LAB 3D.
+
+Correcciones principales frente a la versión anterior:
+- Lock reentrante y cierre interno para evitar el interbloqueo de connect().
+- Generaciones de hilo para que un lector viejo no derribe una conexión nueva.
+- Estado separado "puerto abierto" y "primera trama válida recibida".
+- Detección de datos obsoletos y timeout de primera trama.
+- Emulador sintético no bloqueante, identificado como SIMULACION.
 """
+from __future__ import annotations
+
+import math
 import threading
 import time
-import queue
-from typing import List, Dict, Optional, Callable, Any, Tuple
+from collections import deque
+from typing import Any, Callable, Deque, Dict, List, Optional, Tuple
+
 import serial
 import serial.tools.list_ports
 
+from backend.models import FIRMWARE_ACTUAL, PROTOCOLO_ACTUAL, TelemetrySample
 from backend.parser import SerialParser
-from backend.models import TelemetrySample
+from backend.protocol import ADC_MAX, BAUDIOS, PERIODO_TELEMETRIA_MS
+
 
 class SerialManager:
-    def __init__(self, on_sample_callback: Optional[Callable[[TelemetrySample], None]] = None):
+    def __init__(
+        self,
+        on_sample_callback: Optional[Callable[[TelemetrySample], None]] = None,
+        on_event_callback: Optional[Callable[[str, str], None]] = None,
+    ) -> None:
         self.on_sample_callback = on_sample_callback
+        self.on_event_callback = on_event_callback
+
         self.parser = SerialParser()
         self.serial_port: Optional[serial.Serial] = None
         self.port_name: Optional[str] = None
-        self.baudrate: int = 115200
-        
-        self.is_connected: bool = False
+        self.baudrate: int = BAUDIOS
+
+        self.is_port_open: bool = False
         self.is_running: bool = False
-        self.is_synthetic_mode: bool = False
-        
+        self.is_synthetic: bool = False
+        self.has_valid_frame: bool = False
+
+        self._lock = threading.RLock()
+        self._generation = 0
         self._thread: Optional[threading.Thread] = None
         self._synthetic_thread: Optional[threading.Thread] = None
-        self._lock = threading.Lock()
-        
+
+        self.opened_at_monotonic: Optional[float] = None
         self.last_valid_sample_time: float = 0.0
-        self.stats = {
+        self.last_raw_line: Optional[str] = None
+        self.last_protocol: Optional[str] = None
+        self.stale_after_s: float = 3.0
+        self.first_frame_timeout_s: float = 6.0
+        self.max_line_bytes: int = 1024
+
+        self._sample_timestamps: Deque[float] = deque(maxlen=500)
+        self.stats: Dict[str, Any] = self._initial_stats()
+
+    @staticmethod
+    def _initial_stats() -> Dict[str, Any]:
+        return {
             "bytes_read": 0,
             "samples_received": 0,
             "corrupt_lines": 0,
-            "connection_state": "DISCONNECTED",
+            "ignored_lines": 0,
+            "connection_state": "DESCONECTADO",
             "last_error": None,
-            "sample_rate_hz": 0.0
+            "sample_rate_hz": 0.0,
+            "first_frame_at": None,
         }
-        
-        # Monitor de tasa de muestreo
-        self._sample_timestamps = []
 
+    # ------------------------------------------------------------------
+    # Puertos
+    # ------------------------------------------------------------------
     @staticmethod
     def list_ports() -> List[Dict[str, str]]:
-        """Lista todos los puertos COM disponibles en Windows."""
-        ports = serial.tools.list_ports.comports()
-        result = []
-        for p in ports:
-            result.append({
-                "device": p.device,
-                "description": p.description,
-                "hwid": p.hwid,
-                "is_arduino": "arduino" in p.description.lower() or "ch340" in p.description.lower() or "usb serial" in p.description.lower()
-            })
+        result: List[Dict[str, str]] = []
+        for port in serial.tools.list_ports.comports():
+            description = port.description or ""
+            result.append(
+                {
+                    "device": port.device,
+                    "description": description,
+                    "hwid": port.hwid or "",
+                    "is_arduino": any(
+                        token in description.lower()
+                        for token in ("arduino", "ch340", "usb serial", "usb-serial")
+                    ),
+                }
+            )
         return result
 
-    def connect(self, port: str, baudrate: int = 115200) -> Tuple[bool, str]:
+    # ------------------------------------------------------------------
+    # Conexión serial
+    # ------------------------------------------------------------------
+    def connect(self, port: str, baudrate: int = BAUDIOS) -> Tuple[bool, str]:
         with self._lock:
-            if self.is_connected:
-                self.disconnect()
-                
+            self._stop_locked()
+            self._generation += 1
+            generation = self._generation
+
             self.port_name = port
-            self.baudrate = baudrate
-            self.is_synthetic_mode = False
-            
+            self.baudrate = int(baudrate)
+            self.parser = SerialParser()
+            self.stats = self._initial_stats()
+            self.last_raw_line = None
+            self.last_protocol = None
+            self.has_valid_frame = False
+            self.last_valid_sample_time = 0.0
+            self.is_synthetic = False
+
             try:
-                # Abrir puerto COM con timeout para no congelar
                 self.serial_port = serial.Serial(
                     port=port,
-                    baudrate=baudrate,
-                    timeout=1.0,
-                    write_timeout=1.0
+                    baudrate=self.baudrate,
+                    timeout=0.5,
+                    write_timeout=1.0,
                 )
-                
-                # Reseteo DTR normal en Arduino Uno
+                # Reinicio normal del Arduino Uno al abrir el puerto.
                 self.serial_port.dtr = False
                 time.sleep(0.1)
                 self.serial_port.dtr = True
-                
-                self.is_running = True
-                self.is_connected = True
-                self.stats["connection_state"] = "CONNECTING_WAITING_SYNC"
-                
-                # Iniciar hilo de lectura en segundo plano
-                self._thread = threading.Thread(target=self._reader_loop, daemon=True)
-                self._thread.start()
-                return True, f"Conectado a {port} a {baudrate} baudios. Esperando sincronización inicial..."
-            except Exception as e:
-                self.is_connected = False
-                self.stats["connection_state"] = "ERROR"
-                self.stats["last_error"] = str(e)
-                return False, f"Error al abrir {port}: {str(e)}"
-
-    def start_synthetic_mode(self):
-        """Inicia un emulador de hardware con el comportamiento exacto del firmware sketch_oct5a.ino"""
-        with self._lock:
-            if self.is_connected:
-                self.disconnect()
-            self.is_synthetic_mode = True
-            self.is_running = True
-            self.is_connected = True
-            self.port_name = "SINTETICO_TEST_COM"
-            self.stats["connection_state"] = "SYNTHETIC_ACTIVE"
-            
-            self._synthetic_thread = threading.Thread(target=self._synthetic_loop, daemon=True)
-            self._synthetic_thread.start()
-
-    def disconnect(self):
-        with self._lock:
-            self.is_running = False
-            self.is_connected = False
-            self.stats["connection_state"] = "DISCONNECTED"
-            
-            if self.serial_port and self.serial_port.is_open:
                 try:
-                    self.serial_port.close()
+                    self.serial_port.reset_input_buffer()
                 except Exception:
                     pass
-                self.serial_port = None
-                
-            self.is_synthetic_mode = False
 
-    def _reader_loop(self):
-        """Bucle de lectura en subproceso"""
-        # Descartar primeros datos corruptos causados por el reinicio del Arduino
-        time.sleep(1.5)
-        if self.serial_port and self.serial_port.is_open:
+                self.is_port_open = True
+                self.is_running = True
+                self.opened_at_monotonic = time.monotonic()
+                self.stats["connection_state"] = "ESPERANDO_PRIMERA_TRAMA"
+
+                self._thread = threading.Thread(
+                    target=self._reader_loop,
+                    args=(generation,),
+                    name=f"serial-reader-{generation}",
+                    daemon=True,
+                )
+                self._thread.start()
+                return True, (
+                    f"Puerto {port} abierto a {self.baudrate} baudios. "
+                    "Esperando la primera trama válida del firmware."
+                )
+            except Exception as exc:
+                self.is_port_open = False
+                self.is_running = False
+                self.stats["connection_state"] = "ERROR"
+                self.stats["last_error"] = str(exc)
+                self.serial_port = None
+                return False, f"No se pudo abrir {port}: {exc}"
+
+    def disconnect(self) -> None:
+        with self._lock:
+            self._stop_locked()
+            self.stats["connection_state"] = "DESCONECTADO"
+
+    def _stop_locked(self) -> None:
+        self._generation += 1
+        self.is_running = False
+        self.is_port_open = False
+        self.is_synthetic = False
+        self.has_valid_frame = False
+        self.opened_at_monotonic = None
+
+        port = self.serial_port
+        self.serial_port = None
+        if port is not None:
             try:
-                self.serial_port.reset_input_buffer()
+                if port.is_open:
+                    port.close()
             except Exception:
                 pass
-                
-        buffer = ""
-        while self.is_running and self.serial_port and self.serial_port.is_open:
-            try:
-                data = self.serial_port.readline()
-                if not data:
-                    continue
-                    
-                self.stats["bytes_read"] += len(data)
-                line = data.decode("utf-8", errors="replace").strip()
-                
-                if line:
-                    sample, err = self.parser.parse_line(line, origin="SERIAL_ARDUINO")
-                    if sample:
-                        self.last_valid_sample_time = time.time()
-                        self.stats["connection_state"] = "CONNECTED_STREAMING"
-                        self.stats["samples_received"] += 1
-                        self._track_rate()
-                        if self.on_sample_callback:
-                            self.on_sample_callback(sample)
-                    else:
-                        self.stats["corrupt_lines"] += 1
-                        self.stats["last_error"] = err
-            except serial.SerialException as se:
-                self.stats["connection_state"] = "DISCONNECTED_ERROR"
-                self.stats["last_error"] = f"Desconexión física de puerto: {str(se)}"
-                self.disconnect()
+
+    # ------------------------------------------------------------------
+    # Lector serial
+    # ------------------------------------------------------------------
+    def _reader_loop(self, generation: int) -> None:
+        while self._is_current(generation):
+            with self._lock:
+                port = self.serial_port
+            if port is None or not port.is_open:
                 break
-            except Exception as e:
-                self.stats["last_error"] = str(e)
-                time.sleep(0.01)
 
-    def _synthetic_loop(self):
-        """Simula con precisión el bucle Arduino loop() de sketch_oct5a.ino con retardo de 15ms"""
-        v_pot = 4.20
-        v_filtrado = 0.0
-        v_objetivo = 0.0
-        nivel_pwm = 255.0
-        modo_carga = True
-        velocidad_rampa = 0.01
-        factor_suavizado = 0.2
-        cycle_counter = 0
-        
-        while self.is_running and self.is_synthetic_mode:
-            # Alternar modo cada ~350 ciclos (~5.25 segundos)
-            cycle_counter += 1
-            if cycle_counter > 350:
-                cycle_counter = 0
-                modo_carga = not modo_carga
-                
-            # Generar curva objetivo (código Arduino exacto)
-            if modo_carga:
-                if v_objetivo < v_pot:
-                    v_objetivo += velocidad_rampa
-                elif v_objetivo > v_pot:
-                    v_objetivo -= velocidad_rampa
+            try:
+                data = port.readline()
+            except serial.SerialException as exc:
+                self._handle_serial_error(generation, f"Desconexión física del puerto: {exc}")
+                break
+            except Exception as exc:
+                with self._lock:
+                    if generation == self._generation:
+                        self.stats["last_error"] = str(exc)
+                time.sleep(0.05)
+                continue
+
+            if not data:
+                continue
+
+            with self._lock:
+                if generation != self._generation:
+                    break
+                self.stats["bytes_read"] += len(data)
+
+            line = data.decode("utf-8", errors="replace").strip()
+            if not line:
+                continue
+            if len(line.encode("utf-8", errors="replace")) > self.max_line_bytes:
+                self._record_corrupt("Línea supera el máximo permitido y se descarta")
+                continue
+
+            self.last_raw_line = line[:300]
+            sample, error = self.parser.parse_line(line, origin="SERIAL")
+
+            if sample is not None:
+                self._emit_sample(sample, generation)
+            elif error:
+                self._record_corrupt(error)
+
+    def _handle_serial_error(self, generation: int, message: str) -> None:
+        callback = None
+        with self._lock:
+            if generation != self._generation:
+                return
+            self.stats["connection_state"] = "ERROR"
+            self.stats["last_error"] = message
+            self.is_running = False
+            self.is_port_open = False
+            self.has_valid_frame = False
+            self.opened_at_monotonic = None
+            port = self.serial_port
+            self.serial_port = None
+            if port is not None:
+                try:
+                    if port.is_open:
+                        port.close()
+                except Exception:
+                    pass
+            callback = self.on_event_callback
+
+        if callback:
+            try:
+                callback("disconnected", message)
+            except Exception:
+                pass
+
+    def _record_corrupt(self, message: str) -> None:
+        with self._lock:
+            self.stats["corrupt_lines"] += 1
+            self.stats["last_error"] = message
+
+    # ------------------------------------------------------------------
+    # Emulador sintético
+    # ------------------------------------------------------------------
+    def start_synthetic_mode(
+        self,
+        r_ohm: float = 4700.0,
+        c_farad: float = 0.004,
+        voltaje_techo_v: float = 4.0,
+    ) -> Tuple[bool, str]:
+        with self._lock:
+            self._stop_locked()
+            self._generation += 1
+            generation = self._generation
+
+            if r_ohm <= 0 or c_farad <= 0:
+                return False, "R y C deben ser positivos para el emulador"
+
+            self.parser = SerialParser()
+            self.stats = self._initial_stats()
+            self.port_name = "SINTETICO_TEST"
+            self.baudrate = BAUDIOS
+            self.is_synthetic = True
+            self.is_running = True
+            self.is_port_open = False
+            self.has_valid_frame = False
+            self.last_valid_sample_time = 0.0
+            self.last_raw_line = None
+            self.last_protocol = PROTOCOLO_ACTUAL
+            self.opened_at_monotonic = time.monotonic()
+            self.stats["connection_state"] = "SIMULACION_ACTIVA"
+
+            self._synthetic_thread = threading.Thread(
+                target=self._synthetic_loop,
+                args=(generation, float(r_ohm), float(c_farad), float(voltaje_techo_v)),
+                name=f"synthetic-{generation}",
+                daemon=True,
+            )
+            self._synthetic_thread.start()
+            return True, "Emulador de pruebas iniciado. Los datos se identifican como SIMULACION."
+
+    def _synthetic_loop(
+        self, generation: int, r_ohm: float, c_farad: float, voltaje_techo_v: float
+    ) -> None:
+        tau = max(0.1, r_ohm * c_farad)
+        techo = min(5.0, max(0.1, voltaje_techo_v))
+        ganancia = (1_000_000.0 + 470_000.0) / 470_000.0
+        duracion_fase = max(4.0, 3.0 * tau)
+
+        inicio = time.monotonic()
+        fase_inicio = inicio
+        fase = "C"
+        while self._is_current(generation):
+            ahora = time.monotonic()
+            tiempo_fase = ahora - fase_inicio
+            if tiempo_fase >= duracion_fase:
+                fase = "D" if fase == "C" else "C"
+                fase_inicio = ahora
+                tiempo_fase = 0.0
+
+            if fase == "C":
+                v0 = 0.0
+                vf = techo
+                voltaje = vf - (vf - v0) * math.exp(-tiempo_fase / tau)
+                estado = "C" if voltaje < (vf - 0.01) else "S"
+                pwm = 0
             else:
-                if v_objetivo > 0.0:
-                    v_objetivo -= velocidad_rampa
-                else:
-                    v_objetivo = 0.0
-                    
-            # Simulación física de la respuesta del condensador ante PWM
-            # Dinámica aproximada del circuito RC alimentado por PWM
-            v_fuente_pwm = (nivel_pwm / 255.0) * 5.0
-            # Condensador responde hacia el voltaje efectivo del MOSFET
-            v_instantaneo = v_filtrado + (v_fuente_pwm - v_filtrado) * 0.04
-            # Filtro exponencial Arduino
-            v_filtrado = (factor_suavizado * v_instantaneo) + ((1.0 - factor_suavizado) * v_filtrado)
-            
-            # Controlador incremental del Arduino
-            error = v_filtrado - v_objetivo
-            nivel_pwm += (error * 25.0)
-            if nivel_pwm > 255.0:
-                nivel_pwm = 255.0
-            elif nivel_pwm < 0.0:
-                nivel_pwm = 0.0
-                
-            # Línea con formato exacto del firmware
-            line = f"Min:0.0,Max:5.0,Límite_Pot:{v_pot:.2f},Curva_Objetivo:{v_objetivo:.2f},Voltaje_Real:{v_filtrado:.2f}"
-            sample, err = self.parser.parse_line(line, origin="SINTETICO_TEST")
-            if sample:
-                self.last_valid_sample_time = time.time()
-                self.stats["samples_received"] += 1
-                self._track_rate()
-                if self.on_sample_callback:
-                    self.on_sample_callback(sample)
-                    
-            time.sleep(0.015) # 15 ms delay Arduino loop
+                v0 = techo
+                vf = 0.0
+                voltaje = vf + (v0 - vf) * math.exp(-tiempo_fase / tau)
+                estado = "D" if voltaje > 0.01 else "S"
+                pasos = int(tiempo_fase / 0.015)
+                pwm = max(0, 255 - pasos * 5)
+                if pwm < 5:
+                    pwm = 0
 
-    def _track_rate(self):
-        now = time.monotonic()
-        self._sample_timestamps.append(now)
-        # Mantener últimos 1 segundo
-        self._sample_timestamps = [t for t in self._sample_timestamps if now - t <= 1.0]
-        self.stats["sample_rate_hz"] = len(self._sample_timestamps)
+            voltaje = max(0.0, min(30.0, voltaje))
+            adc_a0 = int(round(min(5.0, max(0.0, (voltaje / ganancia))) / 5.0 * ADC_MAX))
+            adc_a1 = int(round(min(5.0, max(0.0, techo)) / 5.0 * ADC_MAX))
+            millis = int((ahora - inicio) * 1000.0) & 0xFFFFFFFF
+
+            line = (
+                f"R1,{millis},{voltaje:.3f},{techo:.3f},{estado},{pwm},"
+                f"{adc_a0},{adc_a1}"
+            )
+            self.last_raw_line = line
+            sample, _ = self.parser.parse_line(line, origin="SIMULACION")
+            if sample is not None:
+                self._emit_sample(sample, generation)
+
+            siguiente = (int(ahora / (PERIODO_TELEMETRIA_MS / 1000.0)) + 1) * (
+                PERIODO_TELEMETRIA_MS / 1000.0
+            )
+            time.sleep(max(0.005, siguiente - time.monotonic()))
+
+    # ------------------------------------------------------------------
+    # Estado
+    # ------------------------------------------------------------------
+    def _emit_sample(self, sample: TelemetrySample, generation: int) -> None:
+        callback = None
+        with self._lock:
+            if generation != self._generation:
+                return
+            self.has_valid_frame = True
+            self.last_valid_sample_time = time.time()
+            self.last_protocol = sample.protocolo
+            self.stats["samples_received"] += 1
+            self.stats["connection_state"] = (
+                "SIMULACION_ACTIVA" if self.is_synthetic else "TRANSMITIENDO"
+            )
+            self._sample_timestamps.append(time.monotonic())
+            self._refresh_rate_locked()
+            callback = self.on_sample_callback
+
+        if callback:
+            try:
+                callback(sample)
+            except Exception:
+                pass
+
+    def _refresh_rate_locked(self) -> None:
+        ahora = time.monotonic()
+        while self._sample_timestamps and (ahora - self._sample_timestamps[0]) > 1.0:
+            self._sample_timestamps.popleft()
+        self.stats["sample_rate_hz"] = float(len(self._sample_timestamps))
+
+    def _is_current(self, generation: int) -> bool:
+        with self._lock:
+            return generation == self._generation and self.is_running
 
     def get_status(self) -> Dict[str, Any]:
-        time_since_sample = time.time() - self.last_valid_sample_time if self.last_valid_sample_time > 0 else None
-        return {
-            "connected": self.is_connected,
-            "port": self.port_name,
-            "baudrate": self.baudrate,
-            "is_synthetic": self.is_synthetic_mode,
-            "connection_state": self.stats["connection_state"],
-            "sample_rate_hz": round(self.stats["sample_rate_hz"], 1),
-            "total_samples": self.stats["samples_received"],
-            "corrupt_lines": self.stats["corrupt_lines"],
-            "seconds_since_last_sample": round(time_since_sample, 2) if time_since_sample is not None else None,
-            "last_error": self.stats["last_error"]
-        }
+        with self._lock:
+            self._refresh_rate_locked()
+            ahora = time.time()
+            since_last = (
+                ahora - self.last_valid_sample_time
+                if self.last_valid_sample_time > 0
+                else None
+            )
+            stale = since_last is not None and since_last > self.stale_after_s
+            connected = (
+                (self.is_port_open or self.is_synthetic)
+                and self.has_valid_frame
+                and not stale
+            )
+
+            if self.is_synthetic:
+                if self.has_valid_frame and not stale:
+                    state = "SIMULACION_ACTIVA"
+                elif self.has_valid_frame and stale:
+                    state = "DATOS_OBSOLETOS"
+                else:
+                    state = "ESPERANDO_PRIMERA_TRAMA"
+            elif self.is_port_open:
+                if not self.has_valid_frame:
+                    open_for = (
+                        time.monotonic() - self.opened_at_monotonic
+                        if self.opened_at_monotonic is not None
+                        else 0.0
+                    )
+                    state = (
+                        "ESPERANDO_PRIMERA_TRAMA"
+                        if open_for <= self.first_frame_timeout_s
+                        else "SIN_DATOS_VALIDOS"
+                    )
+                elif stale:
+                    state = "DATOS_OBSOLETOS"
+                else:
+                    state = "TRANSMITIENDO"
+            else:
+                state = self.stats.get("connection_state", "DESCONECTADO")
+                if state in {"TRANSMITIENDO", "SIMULACION_ACTIVA"}:
+                    state = "DESCONECTADO"
+
+            return {
+                "connected": bool(connected),
+                "port_open": self.is_port_open,
+                "port": self.port_name,
+                "baudrate": self.baudrate,
+                "is_synthetic": self.is_synthetic,
+                "has_valid_frame": self.has_valid_frame,
+                "connection_state": state,
+                "sample_rate_hz": round(self.stats["sample_rate_hz"], 1),
+                "total_samples": self.stats["samples_received"],
+                "corrupt_lines": self.stats["corrupt_lines"],
+                "ignored_lines": self.stats["ignored_lines"],
+                "seconds_since_last_sample": round(since_last, 2) if since_last is not None else None,
+                "stale": bool(stale),
+                "last_error": self.stats["last_error"],
+                "last_raw_line": self.last_raw_line,
+                "protocol": self.last_protocol or PROTOCOLO_ACTUAL,
+                "firmware": FIRMWARE_ACTUAL,
+                "stale_after_s": self.stale_after_s,
+                "first_frame_timeout_s": self.first_frame_timeout_s,
+                "parser_stats": dict(self.parser.stats),
+            }

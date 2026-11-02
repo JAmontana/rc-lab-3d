@@ -1,95 +1,92 @@
 <#
 .SYNOPSIS
-    Arranca RC LAB 3D en Windows (PowerShell).
+    Arranca RC LAB 3D en Windows (PowerShell) con un entorno virtual local.
 .DESCRIPTION
-    Comprueba Python y las dependencias, inicia el servidor FastAPI/uvicorn
-    y muestra la URL local de la aplicación. Puede ejecutarse antes de conectar
-    el Arduino; incluye un modo de prueba sintética para validar la interfaz
-    sin hardware físico.
+    Crea .venv si no existe, instala/verifica requirements.txt, comprueba que
+    el puerto 8000 esté libre y arranca FastAPI/uvicorn en primer plano.
+    Ctrl+C detiene el servidor y libera el puerto serial.
 .NOTES
-    No modifica la directiva de ejecución de PowerShell global.
+    No modifica la directiva de ejecución global de PowerShell.
+    Si el script está bloqueado: powershell -ExecutionPolicy Bypass -File .\start.ps1
 #>
 
 $ErrorActionPreference = "Stop"
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $scriptDir
 
-# Colores de consola
+$Host.UI.RawUI.WindowTitle = "RC LAB 3D - Servidor local"
+$port = 8000
+
 function Write-Section($text) { Write-Host "`n== $text ==" -ForegroundColor Cyan }
-function Write-Ok($text)  { Write-Host "[OK] $text" -ForegroundColor Green }
-function Write-Warn($text){ Write-Host "[AVISO] $text" -ForegroundColor Yellow }
-function Write-Err($text) { Write-Host "[ERROR] $text" -ForegroundColor Red }
+function Write-Ok($text)      { Write-Host "[OK] $text" -ForegroundColor Green }
+function Write-Warn($text)    { Write-Host "[AVISO] $text" -ForegroundColor Yellow }
+function Write-Err($text)     { Write-Host "[ERROR] $text" -ForegroundColor Red }
 
-Write-Section "RC LAB 3D — Inicio de la aplicación"
+Write-Section "RC LAB 3D - Inicio de la aplicacion"
 
-# 1. Comprobar Python
-if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
-    Write-Err "Python no está instalado o no está en el PATH. Instale Python 3.9+ y vuelva a ejecutar."
+# 1. Python base
+$basePython = Get-Command python -ErrorAction SilentlyContinue
+if (-not $basePython) {
+    Write-Err "Python no esta instalado o no esta en el PATH. Instale Python 3.10+ y reintente."
     exit 1
 }
-$pyVersion = python --version 2>&1
-Write-Ok "Python detectado: $pyVersion"
+Write-Ok "Python base: $(& python --version 2>&1)"
 
-# 2. Verificar dependencias críticas
-$requiredModules = @("fastapi", "uvicorn", "serial", "websockets")
-$missing = @()
-foreach ($mod in $requiredModules) {
-    $found = python -c "import $mod" 2>$null
-    if ($LASTEXITCODE -ne 0) { $missing += $mod }
-}
-
-if ($missing.Count -gt 0) {
-    Write-Warn "Faltan dependencias: $($missing -join ', ')"
-    Write-Host "Instalando dependencias faltantes..." -ForegroundColor Cyan
-    python -m pip install $missing
-    if ($LASTEXITCODE -ne 0) {
-        Write-Err "No se pudieron instalar las dependencias. Revise su conexión a internet o instale manualmente: $($missing -join ' ')"
+# 2. Entorno virtual local
+$venvPython = Join-Path $scriptDir ".venv\Scripts\python.exe"
+if (-not (Test-Path $venvPython)) {
+    Write-Host "Creando entorno virtual .venv ..." -ForegroundColor Cyan
+    & python -m venv .venv
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path $venvPython)) {
+        Write-Err "No se pudo crear .venv. Verifique la instalacion de Python (modulo venv)."
         exit 1
     }
-    Write-Ok "Dependencias instaladas."
-} else {
-    Write-Ok "Todas las dependencias críticas están disponibles."
+    Write-Ok "Entorno virtual creado."
 }
 
-# 3. Evitar procesos duplicados de uvicorn en el puerto 8000
-$existing = Get-Process python -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -like "*uvicorn backend.app:app*" }
-if ($existing) {
-    Write-Warn "Ya existe una instancia de uvicorn ejecutándose (PID $($existing.Id)). Abortando para evitar duplicados."
-    Write-Host "Para detenerla manualmente: Stop-Process -Name python"
-    exit 0
+# 3. Dependencias
+Write-Host "Verificando dependencias de requirements.txt ..." -ForegroundColor Cyan
+& $venvPython -m pip install --disable-pip-version-check -q -r requirements.txt
+if ($LASTEXITCODE -ne 0) {
+    Write-Err "No se pudieron instalar las dependencias. Revise su conexion o ejecute:"
+    Write-Host "  $venvPython -m pip install -r requirements.txt" -ForegroundColor Gray
+    exit 1
+}
+& $venvPython -c "import fastapi, uvicorn, serial, numpy, scipy, pydantic" 2>$null
+if ($LASTEXITCODE -ne 0) {
+    Write-Err "Las dependencias no se importan correctamente dentro de .venv."
+    exit 1
+}
+Write-Ok "Dependencias disponibles en .venv."
+
+# 4. Puerto libre
+$listener = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue
+if ($listener) {
+    $owner = ($listener | Select-Object -First 1).OwningProcess
+    Write-Err "El puerto $port ya esta ocupado (PID $owner)."
+    Write-Host "Detenga el proceso con: Stop-Process -Id $owner" -ForegroundColor Gray
+    exit 1
 }
 
-# 4. Arrancar el backend
-Write-Host "Arrancando servidor FastAPI en http://127.0.0.1:8000 ..." -ForegroundColor Cyan
-$backendProcess = Start-Process python -ArgumentList '-m uvicorn backend.app:app --host 127.0.0.1 --port 8000' -PassThru -WorkingDirectory $scriptDir
+# 5. Arranque en primer plano (Ctrl+C cierra uvicorn y libera el puerto)
+Write-Host ""
+Write-Host "--------------------------------------------------------------" -ForegroundColor Cyan
+Write-Host "  APLICACION:  http://127.0.0.1:$port" -ForegroundColor Green
+Write-Host "  API docs:    http://127.0.0.1:$port/docs" -ForegroundColor Gray
+Write-Host "  Estado API:  http://127.0.0.1:$port/api/status" -ForegroundColor Gray
+Write-Host "  WebSocket:   ws://127.0.0.1:$port/ws/live" -ForegroundColor Gray
+Write-Host "--------------------------------------------------------------" -ForegroundColor Cyan
+Write-Host "  1. Abra la aplicacion en el navegador." -ForegroundColor Gray
+Write-Host "  2. Conecte el Arduino Uno por USB (firmware R1, 9600 baudios)." -ForegroundColor Gray
+Write-Host "     Seleccione el puerto COM y pulse 'Conectar USB'." -ForegroundColor Gray
+Write-Host "  3. Sin hardware, use 'Modo Test' (datos SIMULACION)." -ForegroundColor Gray
+Write-Host ""
+Write-Host "Ctrl+C detiene el servidor y libera el puerto serial." -ForegroundColor Yellow
+Write-Host ""
 
-Write-Ok "Servidor iniciado (PID $($backendProcess.Id))."
-Write-Host ""
-Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan
-Write-Host "  APLICACIÓN DISPONIBLE EN: http://127.0.0.1:8000" -ForegroundColor Green -NoNewline
-Write-Host ""
-Write-Host "  Endpoints útiles:" -ForegroundColor Cyan
-Write-Host "    - API estado:        http://127.0.0.1:8000/api/status" -ForegroundColor Gray
-Write-Host "    - Puertos COM:       http://127.0.0.1:8000/api/ports" -ForegroundColor Gray
-Write-Host "    - Simulación RC:     http://127.0.0.1:8000/api/math/simulate (POST)" -ForegroundColor Gray
-Write-Host "  WebSocket telemetría:  ws://127.0.0.1:8000/ws/live" -ForegroundColor Gray
-Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan
-Write-Host ""
-Write-Host "Pasos siguientes:" -ForegroundColor Cyan
-Write-Host "  1. Abra http://127.0.0.1:8000 en su navegador."
-Write-Host "  2. Conecte su Arduino Uno por USB y seleccione el puerto COM en la barra superior."
-Write-Host "  3. Haga clic en 'Conectar USB' (115200 baudios)."
-Write-Host "  4. O use el botón 'Modo Test' para validar la interfaz con datos sintéticos."
-Write-Host ""
-Write-Host "Para detener el servidor presione Ctrl+C en esta ventana o ejecute:" -ForegroundColor Cyan
-Write-Host "    Stop-Process -Name python" -ForegroundColor Gray
-
-# Mantener el proceso en primer plano mientras el usuario no presione Ctrl+C
-Write-Host "`nPresione Ctrl+C para detener el servidor y liberar el puerto." -ForegroundColor Gray
 try {
-    while ($true) { Start-Sleep -Seconds 1 }
-} catch {
-    Write-Host "`nDeteniendo servidor..." -ForegroundColor Yellow
-    Stop-Process -Id $backendProcess.Id -ErrorAction SilentlyContinue
-    Write-Ok "Servidor detenido. Puerto serial liberado."
+    & $venvPython -m uvicorn backend.app:app --host 127.0.0.1 --port $port
+}
+finally {
+    Write-Host "`nServidor detenido. Puerto serial liberado." -ForegroundColor Yellow
 }
