@@ -171,3 +171,22 @@ def test_estadisticas_del_parser():
     assert parser.stats["lines_received"] == 2
     assert parser.stats["lines_valid"] == 1
     assert parser.stats["lines_corrupt"] == 1
+
+
+def test_techo_rechaza_pico_aislado_con_mediana_movil():
+    parser = SerialParser()
+    for _ in range(4):
+        sample, error = parser.parse_line("R1,1000,1.000,4.000,C,0,200,819")
+        assert error is None
+        assert sample.voltaje_techo == pytest.approx(4.0)
+
+    spike, error = parser.parse_line("R1,1100,1.000,5.400,C,0,200,1000")
+    assert error is None
+    assert spike.voltaje_techo == pytest.approx(4.0)
+
+    assert parser.stats["techo_rechazados"] == 1
+    assert parser.stats["last_techo_rechazado"] == pytest.approx(5.4)
+
+    following, error = parser.parse_line("R1,1200,1.000,4.000,C,0,200,819")
+    assert error is None
+    assert following.voltaje_techo == pytest.approx(4.0)

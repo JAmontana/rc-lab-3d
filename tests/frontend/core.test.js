@@ -178,6 +178,91 @@ test("TauTracker no dispara con una señal estable", () => {
   assert.equal(tracker.events.length, 0);
 });
 
+test("Qmax = C · Ve y tabla de referencia del profesor", () => {
+  // C = 0,004 F · Ve = 5 V → Qmax = 0,020 C = 20 mC
+  approx(Core.qMaxC(0.004, 5), 0.02, 1e-15);
+
+  // Con τ = 1 s, la tabla de comprobación (en mC) debe coincidir.
+  const table = [
+    [0, 0],
+    [0.5, 7.87],
+    [1, 12.64],
+    [2, 17.29],
+    [3, 19.0],
+    [5, 19.87],
+  ];
+  table.forEach(([t, expectedMc]) => {
+    const qMc = Core.chargeAtTimeC(t, 0.02, 1) * 1000;
+    assert.ok(Math.abs(qMc - expectedMc) <= 0.005, `t=${t} s: ${qMc} mC ≠ ${expectedMc} mC`);
+  });
+
+  // En 1τ se alcanza 1 − e^−1 = 63,2 % de Qmax.
+  approx(Core.chargeAtTimeC(1, 0.02, 1) / 0.02, Core.TAU_CHARGE_FACTOR, 1e-12);
+  // τ = R · C en los valores nominales del montaje.
+  approx(Core.tauOf(4700, 0.004), 18.8, 1e-12);
+});
+
+test("despejes de t y tau desde puntos de carga respetan el dominio", () => {
+  const qMax = 0.02;
+  // Con τ = 1 s, t = 1 s → q = 12,64 mC y el despeje debe devolver 1 s.
+  const q1 = Core.chargeAtTimeC(1, qMax, 1);
+  approx(Core.timeForChargeC(1, q1, qMax), 1, 1e-9);
+  approx(Core.tauFromPointChargeC(1, q1, qMax), 1, 1e-9);
+
+  // Punto intermedio: t = 0,5 s → q = 7,87 mC → tau ≈ 1 s.
+  const q05 = Core.chargeAtTimeC(0.5, qMax, 1);
+  approx(Core.tauFromPointChargeC(0.5, q05, qMax), 1, 1e-9);
+  approx(Core.timeForChargeC(1, q05, qMax), 0.5, 1e-9);
+
+  // Dominio inválido: t = 0, q = 0, q = Qmax o datos no finitos.
+  assert.equal(Core.tauFromPointChargeC(0, q05, qMax), null);
+  assert.equal(Core.tauFromPointChargeC(1, 0, qMax), null);
+  assert.equal(Core.tauFromPointChargeC(1, qMax, qMax), null);
+  assert.equal(Core.tauFromPointChargeC(1, -0.001, qMax), null);
+  assert.equal(Core.timeForChargeC(1, 0, qMax), null);
+  assert.equal(Core.timeForChargeC(1, qMax, qMax), null);
+  assert.equal(Core.timeForChargeC(0, q05, qMax), null);
+  assert.equal(Core.tauFromPointChargeC(1, NaN, qMax), null);
+
+  // Con carga inicial distinta de cero se usa la variación Δq.
+  const q0 = 0.01;
+  const qMid = Core.chargeAtTimeGeneralC(1, q0, qMax, 1);
+  approx(Core.tauFromPointChargeC(1, qMid, qMax, q0), 1, 1e-9);
+  approx(Core.timeForChargeC(1, qMid, qMax, q0), 1, 1e-9);
+  assert.equal(Core.tauFromPointChargeC(1, q0, qMax, q0), null);
+});
+
+test("despejes de descarga usan la variación y rechazan el dominio inválido", () => {
+  const q0 = 0.02;
+  const q1 = Core.chargeAtTimeGeneralC(2, q0, 0, 2);
+  approx(Core.tauFromPointDecayC(2, q1, q0, 0), 2, 1e-9);
+  approx(Core.timeForDecayC(2, q1, q0, 0), 2, 1e-9);
+  assert.equal(Core.tauFromPointDecayC(0, q1, q0, 0), null);
+  assert.equal(Core.tauFromPointDecayC(2, q0, q0, 0), null);
+  assert.equal(Core.tauFromPointDecayC(2, 0, q0, 0), null);
+  assert.equal(Core.timeForDecayC(2, 0, q0, 0), null);
+});
+
+test("descarga exponencial conserva el 36,8 % después de un τ", () => {
+  const q0 = 0.02;
+  approx(Core.chargeAtTimeGeneralC(0, q0, 0, 2), q0, 1e-15);
+  approx(Core.chargeAtTimeGeneralC(2, q0, 0, 2), q0 * Core.TAU_DISCHARGE_FACTOR, 1e-15);
+  approx(Core.chargeAtTimeGeneralC(1000, q0, 0, 2), 0, 1e-9);
+  // Nivel final distinto de cero: equilibrio q∞.
+  approx(Core.chargeAtTimeGeneralC(1000, q0, 0.005, 2), 0.005, 1e-9);
+});
+
+test("carga individual qi = Ci · Vc y suma igual a la carga total", () => {
+  const caps = [0.001, 0.001, 0.001, 0.002]; // banco NO necesariamente igual
+  const v = 3.2;
+  const parts = Core.capacitorChargesC(caps, v);
+  approx(parts.reduce((sum, q) => sum + q, 0), 0.005 * v, 1e-15);
+  approx(parts[0], 0.001 * v, 1e-15);
+  approx(parts[3], 0.002 * v, 1e-15);
+  approx(Core.chargeFraction(0.01, 0.02), 0.5, 1e-15);
+  approx(Core.chargeFraction(0.03, 0.02), 1, 1e-15);
+});
+
 test("TauTracker tolera saltos de millis sin inventar tiempos", () => {
   const tracker = new Core.TauTracker();
   tracker.push({ voltaje_tanque: 0.1, voltaje_techo: 4, estado: "C", device_time_ms: 10000 });
@@ -196,4 +281,57 @@ test("TauTracker tolera saltos de millis sin inventar tiempos", () => {
   });
   assert.equal(reset, null);
   assert.equal(tracker.segment.length, 1);
+});
+
+test("resistencias equivalentes en serie suman y en paralelo usan inversos", () => {
+  approx(Core.seriesResistance([1000, 2200, 4700]), 7900);
+  approx(Core.parallelResistance([1000, 2200, 4700]), 1 / (1 / 1000 + 1 / 2200 + 1 / 4700), 1e-9);
+  // Dos resistencias iguales en paralelo dan la mitad.
+  approx(Core.parallelResistance([4700, 4700]), 2350);
+  approx(Core.equivalentResistance([100, 100], "serie"), 200);
+  approx(Core.equivalentResistance([100, 100], "paralelo"), 50);
+  // Un único componente devuelve su propio valor en ambas topologías.
+  approx(Core.equivalentResistance([4700], "serie"), 4700);
+  approx(Core.equivalentResistance([4700], "paralelo"), 4700);
+});
+
+test("capacitancias equivalentes: paralelo suma y serie usa inversos", () => {
+  const uf = (value) => value * 1e-6;
+  const fourInParallel = [uf(1000), uf(1000), uf(1000), uf(1000)];
+  approx(Core.parallelCapacitance(fourInParallel), 0.004, 1e-15);
+  approx(Core.equivalentCapacitance(fourInParallel, "paralelo"), 0.004, 1e-15);
+  // Dos condensadores iguales en serie dan la mitad.
+  approx(Core.seriesCapacitance([uf(1000), uf(1000)]), uf(500), 1e-15);
+  approx(Core.equivalentCapacitance([uf(1000), uf(1000)], "serie"), uf(500), 1e-15);
+  approx(Core.seriesCapacitance([uf(100), uf(220)]), 1 / (1 / uf(100) + 1 / uf(220)), 1e-15);
+});
+
+test("las equivalencias rechazan listas vacías, ceros y valores no numéricos", () => {
+  for (const bad of [[], [0], [-100], [100, null], ["x"], undefined, null]) {
+    assert.equal(Core.seriesResistance(bad), null);
+    assert.equal(Core.parallelResistance(bad), null);
+    assert.equal(Core.seriesCapacitance(bad), null);
+    assert.equal(Core.parallelCapacitance(bad), null);
+    assert.equal(Core.equivalentResistance(bad, "serie"), null);
+    assert.equal(Core.equivalentCapacitance(bad, "paralelo"), null);
+  }
+});
+
+test("τ y Qmax de la configuración base: 4700 Ω × 0,004 F = 18,8 s", () => {
+  const ceq = Core.parallelCapacitance([1e-3, 1e-3, 1e-3, 1e-3]);
+  const tau = Core.tauOf(4700, ceq);
+  approx(ceq, 0.004, 1e-15);
+  approx(tau, 18.8, 1e-12);
+  // En un τ la carga es el 63,2 % de Qmax.
+  approx(Core.chargeAtTimeC(tau, Core.qMaxC(ceq, 5), tau), Core.qMaxC(ceq, 5) * Core.TAU_CHARGE_FACTOR, 1e-15);
+  approx(Core.qMaxC(ceq, 5), 0.02, 1e-15);
+});
+
+test("isPhysicalSample separa el Arduino del emulador", () => {
+  assert.equal(Core.isPhysicalSample({ origen: "SERIAL" }), true);
+  assert.equal(Core.isPhysicalSample({ origen: "" }), true);
+  assert.equal(Core.isPhysicalSample({}), true);
+  assert.equal(Core.isPhysicalSample({ origen: "SIMULACION" }), false);
+  assert.equal(Core.isPhysicalSample({ origen: "simulacion" }), false);
+  assert.equal(Core.isPhysicalSample(null), false);
 });

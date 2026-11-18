@@ -16,6 +16,8 @@ from __future__ import annotations
 import math
 import re
 import time
+from collections import deque
+from statistics import median
 from typing import Dict, Optional, Tuple
 
 from backend.models import FIRMWARE_ACTUAL, PROTOCOLO_ACTUAL, TelemetrySample
@@ -62,11 +64,15 @@ class SerialParser:
         self.last_monotonic_time: Optional[float] = None
         self.last_legacy_voltage: Optional[float] = None
         self.last_legacy_monotonic: Optional[float] = None
+        self._techo_window: deque[float] = deque(maxlen=5)
+        self._techo_rejected: deque[float] = deque(maxlen=20)
         self.stats = {
             "lines_received": 0,
             "lines_valid": 0,
             "lines_corrupt": 0,
             "lines_ignored": 0,
+            "techo_rechazados": 0,
+            "last_techo_rechazado": None,
             "last_error": None,
             "last_protocol": None,
         }
@@ -167,7 +173,7 @@ class SerialParser:
             protocolo=PROTOCOLO_ACTUAL,
             device_time_ms=millis,
             tank=tank,
-            techo=techo,
+            techo=self._filter_ceiling(techo),
             estado=estado,
             estado_confianza=1.0,
             pwm=float(pwm),
@@ -202,7 +208,7 @@ class SerialParser:
             protocolo=PROTOCOLO_LEGACY_2F,
             device_time_ms=millis,
             tank=tank,
-            techo=techo,
+            techo=self._filter_ceiling(techo),
             estado=estado,
             estado_confianza=confianza,
             pwm=None,
@@ -238,7 +244,7 @@ class SerialParser:
             protocolo=PROTOCOLO_LEGACY_V1,
             device_time_ms=int(now * 1000.0) & 0xFFFFFFFF,
             tank=tank,
-            techo=techo,
+            techo=self._filter_ceiling(techo),
             estado=estado,
             estado_confianza=confianza,
             pwm=None,
@@ -279,6 +285,22 @@ class SerialParser:
         self.last_legacy_voltage = tank
         self.last_legacy_monotonic = now
         return estado, round(confianza, 2)
+
+    def _filter_ceiling(self, techo: float) -> float:
+        """Mediana móvil de 5 muestras para rechazar picos aislados del techo.
+
+        El valor bruto se registra en ``stats`` cuando se aparta más de 0,75 V
+        de la mediana; no se reemplaza por 5 V ni se descarta la muestra de
+        telemetría completa.
+        """
+        raw = float(techo)
+        self._techo_window.append(raw)
+        filtered = float(median(self._techo_window))
+        if len(self._techo_window) >= 3 and abs(raw - filtered) > 0.75:
+            self.stats["techo_rechazados"] += 1
+            self.stats["last_techo_rechazado"] = raw
+            self._techo_rejected.append(raw)
+        return filtered
 
     @staticmethod
     def _range_warnings(tank: float, techo: float) -> Optional[str]:

@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="RC LAB 3D">
+  <rect width="64" height="64" rx="13" fill="#202B34"/>
+  <rect x="0.75" y="0.75" width="62.5" height="62.5" rx="12.25" fill="none" stroke="#35495A" stroke-width="1.5"/>
+  <path d="M10 36h8M18 36V20M18 20h8" fill="none" stroke="#00D9FF" stroke-width="3" stroke-linecap="round"/>
+  <path d="M38 36h8M46 36V20M46 20h8" fill="none" stroke="#00D9FF" stroke-width="3" stroke-linecap="round"/>
+  <path d="M26 16v24M30 16v24" stroke="#EDF3F5" stroke-width="3" stroke-linecap="round"/>
+  <circle cx="24" cy="48" r="2.4" fill="#B7F400"/>
+  <circle cx="32" cy="48" r="2.4" fill="#FF9D32"/>
+  <circle cx="40" cy="48" r="2.4" fill="#83939E"/>
+</svg>

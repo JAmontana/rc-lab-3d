@@ -251,6 +251,14 @@ class CircuitConfigUpdate(BaseModel):
     tolerancia_vref_pct: Optional[float] = Field(None, ge=0, le=100)
 
 
+class SyntheticStartRequest(BaseModel):
+    scenario: str = Field("completo", pattern="^(completo|carga|descarga)$")
+    voltaje_techo_v: float = Field(4.0, ge=0.1, le=5.0)
+    speed: float = Field(8.0, ge=1.0, le=50.0)
+    r_ohm: Optional[float] = Field(None, gt=0, le=1e9)
+    c_farad: Optional[float] = Field(None, gt=0, le=10)
+
+
 # ----------------------------------------------------------------------
 # Utilidades
 # ----------------------------------------------------------------------
@@ -353,7 +361,8 @@ async def disconnect_serial():
 
 
 @app.post("/api/synthetic/start")
-async def start_synthetic():
+async def start_synthetic(request: Optional[SyntheticStartRequest] = None):
+    request = request or SyntheticStartRequest()
     try:
         if session_mgr.is_recording:
             await run_in_threadpool(session_mgr.stop_session, "cambio_a_simulacion")
@@ -361,14 +370,21 @@ async def start_synthetic():
             await run_in_threadpool(serial_mgr.disconnect)
         success, message = await run_in_threadpool(
             serial_mgr.start_synthetic_mode,
-            circuit_config.resistencia_carga_ohm or 4700.0,
-            circuit_config.capacitancia_f,
-            4.0,
+            request.r_ohm or circuit_config.resistencia_carga_ohm or 4700.0,
+            request.c_farad or circuit_config.capacitancia_f,
+            request.voltaje_techo_v,
+            request.speed,
+            request.scenario,
         )
         if not success:
             raise HTTPException(status_code=400, detail=message)
         _publish_status()
-        return {"success": True, "message": message, "serial": serial_mgr.get_status()}
+        return {
+            "success": True,
+            "message": message,
+            "serial": serial_mgr.get_status(),
+            "plan": serial_mgr.get_synthetic_plan(),
+        }
     except HTTPException:
         raise
     except Exception as exc:
@@ -711,6 +727,27 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
             )
         },
     )
+
+
+@app.get("/health", tags=["sistema"])
+async def health():
+    """Sonda ligera para clientes y monitores; no sustituye /api/status."""
+    serial = serial_mgr.get_status()
+    return {
+        "status": "ok",
+        "version": APP_VERSION,
+        "serial_connected": bool(serial.get("connected")),
+        "connection_state": serial.get("connection_state"),
+        "session_active": bool(session_mgr.is_recording),
+    }
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon():
+    path = os.path.join(FRONTEND_DIR, "assets", "brand", "favicon.svg")
+    if os.path.isfile(path):
+        return FileResponse(path, media_type="image/svg+xml")
+    raise HTTPException(status_code=404, detail="Favicon no disponible")
 
 
 app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")

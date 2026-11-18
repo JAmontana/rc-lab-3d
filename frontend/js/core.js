@@ -44,6 +44,197 @@
   const energyJ = (capacitanceF, voltageV) => 0.5 * capacitanceF * voltageV * voltageV;
   const chargeC = (capacitanceF, voltageV) => capacitanceF * voltageV;
 
+  /**
+   * Carga máxima teórica del banco: Qmax = C_eq · V_e.
+   * V_e es la tensión final de referencia (el techo seleccionado con A1 en
+   * el montaje, o V_f en la simulación). No se mide ningún sensor de carga:
+   * se obtiene de la capacitancia declarada y del voltaje.
+   */
+  function qMaxC(capacitanceF, referenceVoltageV) {
+    if (!isFiniteNumber(capacitanceF) || !isFiniteNumber(referenceVoltageV)) return 0;
+    return Math.max(0, capacitanceF) * Math.max(0, referenceVoltageV);
+  }
+
+  /**
+   * Fórmula del profesor para la carga:
+   *   q(t) = Qmax · (1 − e^(−t/τ))
+   * Devuelve culombios. Con t ≤ 0 la carga es cero.
+   */
+  function chargeAtTimeC(t, qMax, tau) {
+    const qmax = isFiniteNumber(qMax) ? qMax : 0;
+    if (!isFiniteNumber(t) || t <= 0) return 0;
+    if (!isFiniteNumber(tau) || tau <= 0) return 0;
+    return qmax * (1 - Math.exp(-t / tau));
+  }
+
+  /**
+   * Forma general de la exponencial de carga/descarga para la carga eléctrica:
+   *   q(t) = q∞ + (q0 − q∞) · e^(−t/τ)
+   * Permite partir de una carga inicial q0 y llegar a un equilibrio q∞.
+   * - Carga desde el banco vacío: q0 = 0, q∞ = Qmax.
+   * - Descarga hacia cero: q0 = Q0, q∞ = 0 → q(t) = Q0 · e^(−t/τ).
+   */
+  function chargeAtTimeGeneralC(t, q0, qInf, tau) {
+    const start = isFiniteNumber(q0) ? q0 : 0;
+    const end = isFiniteNumber(qInf) ? qInf : 0;
+    if (!isFiniteNumber(t) || t <= 0) return start;
+    if (!isFiniteNumber(tau) || tau <= 0) return start;
+    return end + (start - end) * Math.exp(-t / tau);
+  }
+
+  /** Constante de tiempo: τ = R · C. Devuelve null si los datos no son válidos. */
+  function tauOf(rOhm, capacitanceF) {
+    if (!isFiniteNumber(rOhm) || !isFiniteNumber(capacitanceF)) return null;
+    if (rOhm <= 0 || capacitanceF <= 0) return null;
+    return rOhm * capacitanceF;
+  }
+
+  /**
+   * Lista de valores positivos o null. Se usa para las equivalencias: una
+   * lista vacía, con un valor no numérico o con cero no permite calcular y
+   * debe mostrarse como «dato pendiente de configurar».
+   */
+  function positiveValues(values) {
+    if (!Array.isArray(values) || values.length === 0) return null;
+    const parsed = values.map((value) => Number(value));
+    if (parsed.some((value) => !isFiniteNumber(value) || value <= 0)) return null;
+    return parsed;
+  }
+
+  /** Resistencias en serie: Req = R1 + R2 + … */
+  function seriesResistance(values) {
+    const list = positiveValues(values);
+    if (!list) return null;
+    return list.reduce((sum, value) => sum + value, 0);
+  }
+
+  /** Resistencias en paralelo: 1/Req = 1/R1 + 1/R2 + … */
+  function parallelResistance(values) {
+    const list = positiveValues(values);
+    if (!list) return null;
+    const inverse = list.reduce((sum, value) => sum + 1 / value, 0);
+    return inverse > 0 ? 1 / inverse : null;
+  }
+
+  function equivalentResistance(values, topology) {
+    const parallel = String(topology || "").toLowerCase().startsWith("paralelo");
+    return parallel ? parallelResistance(values) : seriesResistance(values);
+  }
+
+  /** Condensadores en serie: 1/Ceq = 1/C1 + 1/C2 + … */
+  function seriesCapacitance(values) {
+    const list = positiveValues(values);
+    if (!list) return null;
+    const inverse = list.reduce((sum, value) => sum + 1 / value, 0);
+    return inverse > 0 ? 1 / inverse : null;
+  }
+
+  /** Condensadores en paralelo: Ceq = C1 + C2 + … */
+  function parallelCapacitance(values) {
+    const list = positiveValues(values);
+    if (!list) return null;
+    return list.reduce((sum, value) => sum + value, 0);
+  }
+
+  function equivalentCapacitance(values, topology) {
+    const series = String(topology || "").toLowerCase().startsWith("serie");
+    return series ? seriesCapacitance(values) : parallelCapacitance(values);
+  }
+
+  /**
+   * Una muestra es física solo si no procede del emulador. El Modo prueba
+   * envía `origen = "SIMULACION"`; esos datos nunca deben presentarse como
+   * mediciones del Arduino.
+   */
+  function isPhysicalSample(sample) {
+    if (!sample) return false;
+    return String(sample.origen || "SERIAL").toUpperCase() !== "SIMULACION";
+  }
+
+  /**
+   * Despeje del tiempo en la carga: t = −τ · ln(1 − Δq/Δqmax).
+   * Δq = q − q0 y Δqmax = Qmax − q0 separan la variación de carga cuando el
+   * evento no empieza en cero. Devuelve null en el dominio no válido:
+   * t ≤ 0, Δq ≤ 0, Δq ≥ Δqmax, τ ≤ 0 o datos no finitos.
+   */
+  function timeForChargeC(tau, qC, qMaxC, q0C = 0) {
+    if (!isFiniteNumber(tau) || tau <= 0) return null;
+    const start = isFiniteNumber(q0C) ? q0C : 0;
+    const max = isFiniteNumber(qMaxC) ? qMaxC : 0;
+    const charge = isFiniteNumber(qC) ? qC : NaN;
+    const span = max - start;
+    const delta = charge - start;
+    if (!(span > 0) || !(delta > 0) || !(delta < span)) return null;
+    const time = -tau * Math.log(1 - delta / span);
+    return isFiniteNumber(time) && time >= 0 ? time : null;
+  }
+
+  /**
+   * Tau estimado a partir de un punto experimental de carga:
+   * τ = −t / ln(1 − Δq/Δqmax).
+   * Es sensible al ruido y a las tolerancias, por eso distintos puntos pueden
+   * dar valores ligeramente distintos. Devuelve null si el punto no permite
+   * una estimación (t = 0, q = q0, q = Qmax o datos inválidos).
+   */
+  function tauFromPointChargeC(t, qC, qMaxC, q0C = 0) {
+    if (!isFiniteNumber(t) || t <= 0) return null;
+    const start = isFiniteNumber(q0C) ? q0C : 0;
+    const max = isFiniteNumber(qMaxC) ? qMaxC : 0;
+    const charge = isFiniteNumber(qC) ? qC : NaN;
+    const span = max - start;
+    const delta = charge - start;
+    if (!(span > 0) || !(delta > 0) || !(delta < span)) return null;
+    const tau = -t / Math.log(1 - delta / span);
+    return isFiniteNumber(tau) && tau > 0 ? tau : null;
+  }
+
+  /**
+   * Despeje del tiempo en la descarga: t = −τ · ln((q − q∞)/(q0 − q∞)).
+   * Válido solo entre q∞ y q0. Devuelve null fuera de ese dominio.
+   */
+  function timeForDecayC(tau, qC, q0C, qInfC = 0) {
+    if (!isFiniteNumber(tau) || tau <= 0) return null;
+    const start = isFiniteNumber(q0C) ? q0C : 0;
+    const inf = isFiniteNumber(qInfC) ? qInfC : 0;
+    const charge = isFiniteNumber(qC) ? qC : NaN;
+    const span = start - inf;
+    const delta = charge - inf;
+    if (!(span > 0) || !(delta > 0) || !(delta < span)) return null;
+    const time = -tau * Math.log(delta / span);
+    return isFiniteNumber(time) && time >= 0 ? time : null;
+  }
+
+  /** Tau estimado desde un punto de descarga: τ = −t / ln((q − q∞)/(q0 − q∞)). */
+  function tauFromPointDecayC(t, qC, q0C, qInfC = 0) {
+    if (!isFiniteNumber(t) || t <= 0) return null;
+    const start = isFiniteNumber(q0C) ? q0C : 0;
+    const inf = isFiniteNumber(qInfC) ? qInfC : 0;
+    const charge = isFiniteNumber(qC) ? qC : NaN;
+    const span = start - inf;
+    const delta = charge - inf;
+    if (!(span > 0) || !(delta > 0) || !(delta < span)) return null;
+    const tau = -t / Math.log(delta / span);
+    return isFiniteNumber(tau) && tau > 0 ? tau : null;
+  }
+
+  /**
+   * Carga individual de cada condensador: qi(t) = Ci · Vc(t).
+   * La suma coincide con la carga total del banco:
+   *   qtotal(t) = Σ qi(t) = Ceq · Vc(t)
+   * No se asume que las capacitancias reales sean iguales: cada una recibe
+   * su propio Ci. La igualdad solo es una hipótesis nominal declarada.
+   */
+  function capacitorChargesC(capacitancesF, voltageV) {
+    if (!Array.isArray(capacitancesF) || !isFiniteNumber(voltageV)) return [];
+    return capacitancesF.map((ci) => (isFiniteNumber(ci) ? ci * voltageV : 0));
+  }
+
+  /** Fracción de carga q(t)/Qmax, acotada a [0, 1]. */
+  function chargeFraction(qC, qMaxValue) {
+    if (!isFiniteNumber(qC) || !isFiniteNumber(qMaxValue) || qMaxValue <= 0) return 0;
+    return clamp(qC / qMaxValue, 0, 1);
+  }
+
   function characteristicPoint(mode, v0, vf) {
     if (String(mode).toUpperCase() === "DESCARGA") {
       return {
@@ -445,6 +636,23 @@
     modelAt,
     energyJ,
     chargeC,
+    qMaxC,
+    chargeAtTimeC,
+    chargeAtTimeGeneralC,
+    tauOf,
+    seriesResistance,
+    parallelResistance,
+    equivalentResistance,
+    seriesCapacitance,
+    parallelCapacitance,
+    equivalentCapacitance,
+    isPhysicalSample,
+    timeForChargeC,
+    tauFromPointChargeC,
+    timeForDecayC,
+    tauFromPointDecayC,
+    capacitorChargesC,
+    chargeFraction,
     characteristicPoint,
     unwrapMillis,
     interpolateCrossing,

@@ -31,44 +31,132 @@
       this._userPausedCharts = false;
       this._sessionsLoaded = false;
       this._ports = [];
+      this._presentationPaused = false;
+      this.testDemo = null;
+      this.circuitConfig = null;
+      this._circuitSummary = null;
+      this._configApplyTimer = null;
+      this._backendSyncTimer = null;
+      this.initErrors = [];
+      // Parámetros de referencia del montaje para q(t). R es la resistencia
+      // declarada (nominal, ilustrativa o medida); A1 sigue siendo voltaje techo.
+      this.liveRef = {
+        c: 0.004,
+        rCharge: 4700,
+        rDischarge: 4700,
+        tau: 18.8,
+        tauDischarge: 18.8,
+        ceiling: 5,
+        source: "nominal",
+        pending: {},
+      };
+      this._latestSample = null;
+      this._liveFollowing = true;
+      this._liveSelection = null;
+      this._liveSceneState = null;
+      this._selectedCapIndex = null;
+      global.app = this;
       this._init();
     }
 
     _init() {
-      this.initCharts();
-      this.initScene();
-      this.initSimulator();
-      this.initAnalysis();
-      this.bindTabs();
-      this.bindConnection();
-      this.bindSession();
-      this.bindTauModal();
-      this.bindStaticActions();
-      this.bindStore();
-      this.loadPorts();
-      this.refreshStatus();
-      this.loadSessions();
-      this.connectWebSocket();
+      // La navegación se registra primero: un fallo de un módulo visual no
+      // debe dejar toda la interfaz bloqueada.
+      this._run("navegación", () => this.bindTabs());
+      this._run("configuración del circuito", () => this.initCircuitConfig());
+      this._run("conexión", () => this.bindConnection());
+      this._run("sesiones", () => this.bindSession());
+      this._run("pausa didáctica", () => this.bindTauModal());
+      this._run("acciones", () => this.bindStaticActions());
+      this._run("carga en vivo", () => this.bindLiveChargeControls());
+      this._run("almacén", () => this.bindStore());
+      this._run("gráficas", () => this.initCharts());
+      this._run("escena 3D", () => this.initScene());
+      this._run("simulador", () => this.initSimulator());
+      this._run("análisis", () => this.initAnalysis());
+      this._run("modo test", () => this.initTestDemo());
 
-      this.statusTimer = window.setInterval(() => this.refreshStatus(), 2600);
+      this._run("puertos", () => this.loadPorts());
+      this._run("estado inicial", () => this.refreshStatus());
+      this._run("historial", () => this.loadSessions());
+      this._run("WebSocket", () => this.connectWebSocket());
+
+      this.statusTimer = window.setInterval(() => this.refreshStatus(), 15000);
       this.ageTimer = window.setInterval(() => this.updateAge(), 500);
+    }
+
+    _run(label, fn) {
+      try {
+        const result = fn();
+        if (result && typeof result.catch === "function") {
+          result.catch((error) => this._reportInitError(label, error));
+        }
+        return result;
+      } catch (error) {
+        this._reportInitError(label, error);
+        return null;
+      }
+    }
+
+    _reportInitError(label, error) {
+      console.error(`Error al inicializar ${label}`, error);
+      this.initErrors.push({ label, error });
+      if (global.UI && global.UI.toast) {
+        global.UI.toast(`No se pudo inicializar ${label}: ${error.message || error}`, "error", 9000);
+      }
     }
 
     /* ------------------------------------------------------------------ */
     /* Inicialización                                                      */
     /* ------------------------------------------------------------------ */
+    initCircuitConfig() {
+      if (!global.RCCircuitConfig || !global.RCCircuitConfig.CircuitConfigPanel) return;
+      this.circuitConfig = new global.RCCircuitConfig.CircuitConfigPanel({
+        onChange: (summary) => this.applyCircuitSummary(summary),
+        onContinue: (summary) => {
+          this.applyCircuitSummary(summary, { immediate: true });
+          if (this.simulator) this.simulator.applyCircuitConfig(summary);
+          this.switchView("view-lab");
+          UI.toast("Circuito guardado. El laboratorio usará estos valores.", "ok");
+        },
+      });
+    }
+
     initCharts() {
       this.charts = new global.RCCharts(this.store, {
         onInsight: (event) => this.renderInsight(event),
+        onRange: (maxVolts) => this.showLabAlert(
+          `Medición fuera de la escala de 5,5 V (${FMT.number(maxVolts, 2)} V). ` +
+            "Los datos se conservan sin recortar; revisa la calibración del divisor y la fuente.",
+          "warning",
+          "out-of-range"
+        ),
       });
       this.charts.initLive();
+      this.charts.bindChargeClick("chart-live", (time) => this.selectLiveTime(time, true));
+      // El resumen de «Configurar circuito» ya está disponible antes que las
+      // gráficas. Si no existiera, se conserva la referencia nominal.
+      if (this._circuitSummary) {
+        this.applyCircuitSummary(this._circuitSummary, { immediate: true });
+      } else {
+        this.applyLiveReference({ capacitancia_f: 0.004, resistencia_carga_ohm: 4700 });
+      }
+      this.renderLiveCharge(null);
+      if (this.charts.renderAnalysisEmptyState) this.charts.renderAnalysisEmptyState();
     }
 
     initScene() {
       if (!global.RCLab3D) return;
       this.scene = new global.RCLab3D("scene-live", {
         onSelect: (component) => this.showComponentCard(component),
+        onCapacitorSelect: (index, snapshot) => this.showCapacitorCard(index, snapshot),
       });
+      if (!this.scene || !this.scene.renderer) {
+        this.showSceneDiagnostic("No se pudo iniciar WebGL. Revisa la aceleración gráfica del navegador.");
+      } else {
+        this.scene.setCapacitance(this.liveRef.c, this.capacitanceParts(this.liveRef.c));
+        if (this._liveSceneState) this.scene.setChargeState(this._liveSceneState);
+      }
       global.RCShowComponent = (component, target) => {
         if (!component) return;
         if (target === "sim") {
@@ -84,8 +172,15 @@
         charts: this.charts,
         onStart: () => this.setSimulationVisual(true),
         onStop: () => this.setSimulationVisual(false),
-        onTau: (event, isSimulation) => this.showTauModal(event, isSimulation),
+        onTau: (event, isSimulation) => {
+          this.showTauModal(event, isSimulation);
+          const scene = this.simulator && this.simulator.scene;
+          if (scene && scene.flashTau) scene.flashTau(event);
+        },
       });
+      if (this._circuitSummary && this.simulator.applyCircuitConfig) {
+        this.simulator.applyCircuitConfig(this._circuitSummary);
+      }
     }
 
     initAnalysis() {
@@ -93,10 +188,29 @@
         onRequestSessions: () => this.switchView("view-sessions"),
       });
       this.analysis.loadConfig().then(() => {
-        const c = this.analysis.config && this.analysis.config.capacitancia_f;
-        if (Number.isFinite(Number(c))) this.store.setCapacitance(c);
+        const config = this.analysis.config || {};
+        if (this._circuitSummary) {
+          // La configuración declarada manda: los campos del análisis se
+          // muestran sincronizados, sin que el valor por defecto del backend
+          // sobrescriba lo que el estudiante acaba de declarar.
+          this.analysis.applyConfig(Object.assign({}, config, {
+            capacitancia_f: this.liveRef.c,
+            resistencia_carga_ohm: this.liveRef.rCharge,
+            resistencia_descarga_ohm: this.liveRef.rDischarge,
+            vref_v: this.liveRef.ceiling,
+          }));
+        } else {
+          const c = config.capacitancia_f;
+          if (Number.isFinite(Number(c))) this.store.setCapacitance(c);
+          this.applyLiveReference(config);
+        }
         this.updateCapLabel();
       });
+    }
+
+    initTestDemo() {
+      if (!global.TestDemoPanel) return;
+      this.testDemo = new global.TestDemoPanel(this);
     }
 
     bindStore() {
@@ -120,26 +234,41 @@
     }
 
     switchView(viewId) {
-      const tabs = Array.from(document.querySelectorAll(".tab"));
-      tabs.forEach((tab) => {
-        const active = tab.getAttribute("data-view") === viewId;
-        tab.classList.toggle("is-active", active);
-        tab.setAttribute("aria-selected", active ? "true" : "false");
-      });
-      document.querySelectorAll(".view").forEach((view) => view.classList.toggle("is-active", view.id === viewId));
+      const nav = global.RCNavigation;
+      if (nav) {
+        if (!nav.activate(viewId)) return;
+      } else {
+        const tabs = Array.from(document.querySelectorAll(".tab"));
+        tabs.forEach((tab) => {
+          const active = tab.getAttribute("data-view") === viewId;
+          tab.classList.toggle("is-active", active);
+          tab.setAttribute("aria-selected", active ? "true" : "false");
+        });
+        document.querySelectorAll(".view").forEach((view) => view.classList.toggle("is-active", view.id === viewId));
+      }
 
       if (viewId === "view-analysis") {
-        window.setTimeout(() => this.charts.resizeAll(), 60);
+        if (this.charts) {
+          window.setTimeout(() => {
+            this.charts.resizeAll();
+            if (this.charts.reflowAnalysis) this.charts.reflowAnalysis();
+          }, 70);
+        }
       }
       if (viewId === "view-sim") {
-        this.simulator.ensureScene();
-        if (this.simulator.result) this.charts.plotSimulation(this.simulator.result);
-        window.setTimeout(() => this.charts.resizeAll(), 80);
+        if (this.simulator) this.simulator.ensureScene();
+        if (this.simulator && this.simulator.chargeModel) {
+          this.simulator.renderChargeChart();
+          this.simulator.setSelectedTime(this.simulator.selectedTime, { silent: true });
+        } else if (this.simulator && this.simulator.result && this.charts) {
+          this.charts.plotSimulation(this.simulator.result);
+        }
+        if (this.charts) window.setTimeout(() => this.charts.resizeAll(), 80);
       }
       if (viewId === "view-lab" && this.scene) {
         window.setTimeout(() => {
           this.scene.resize();
-          this.charts.resizeAll();
+          if (this.charts) this.charts.resizeAll();
         }, 60);
       }
       if (viewId === "view-sessions") {
@@ -255,17 +384,26 @@
       }
     }
 
-    async startSynthetic() {
+    async startSynthetic(options = {}) {
       try {
-        const data = await API.startSynthetic();
+        const data = await API.startSynthetic(options);
         UI.toast(data.message || "Emulador iniciado.", "info");
         this.lastStatus = data.serial;
         this.applySerialStatus(data.serial);
         this.store.reset("inicio_simulacion");
-        this.charts.clearLive();
+        this._userPausedCharts = false;
+        this._presentationPaused = false;
+        if (this.charts) {
+          this.charts.setLivePaused(false);
+          this.charts.clearLive();
+        }
+        this.renderInsight(null);
         this.updateCapLabel();
+        this.resetLiveCaption();
+        return data;
       } catch (error) {
         UI.toast(error.message, "error");
+        throw error;
       }
     }
 
@@ -300,7 +438,14 @@
         this.applySessionStatus(payload.session);
       }
       if (payload.config && Number.isFinite(Number(payload.config.capacitancia_f))) {
-        this.store.setCapacitance(payload.config.capacitancia_f);
+        if (this._circuitSummary) {
+          // La configuración declarada por el estudiante tiene prioridad sobre
+          // los valores por defecto del backend.
+          this.store.setCapacitance(this.liveRef.c);
+        } else {
+          this.store.setCapacitance(payload.config.capacitancia_f);
+          this.applyLiveReference(payload.config);
+        }
         this.updateCapLabel();
       }
     }
@@ -399,9 +544,19 @@
     /* Telemetría                                                          */
     /* ------------------------------------------------------------------ */
     onSample(sample) {
+      if (this.testDemo) this.testDemo.onSample(sample);
+      if (this._presentationPaused) return;
+      this.renderSample(sample);
+    }
+
+    renderSample(sample) {
+      this._latestSample = sample;
       this.updateMetrics(sample);
+      this.updateLiveCaption(sample);
       if (this.scene) this.scene.updateFromSample(sample);
-      this.charts.scheduleLive();
+      if (this.charts) this.charts.scheduleLive();
+      this.updateLiveMeta(sample);
+      this.renderLiveCharge(sample);
       const staleEl = document.getElementById("scene-stale");
       if (staleEl) staleEl.classList.add("hidden");
       if (this.scene) this.scene.setStale(false);
@@ -409,6 +564,594 @@
       if (sample.anomalia && sample.mensaje_anomalia) {
         this.showLabAlert(sample.mensaje_anomalia, "warning", `anomaly-${Math.round(sample.t_rel)}`);
       }
+      const measured = Number(sample.voltaje_tanque);
+      if (Number.isFinite(measured) && measured > 5.5) {
+        this.showLabAlert(
+          `Voltaje medido fuera de la escala de 5,5 V (${FMT.number(measured, 2)} V). ` +
+            "No se recorta el dato; verifica calibración y divisor.",
+          "warning",
+          "out-of-range"
+        );
+      }
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* Carga eléctrica q(t) en el montaje físico                           */
+    /* ------------------------------------------------------------------ */
+    bindLiveChargeControls() {
+      const slider = document.getElementById("live-time");
+      if (slider) {
+        slider.addEventListener("input", () => {
+          this._liveFollowing = false;
+          this.selectLiveTime(Number(slider.value), true);
+        });
+      }
+      const now = document.getElementById("btn-live-now");
+      if (now) now.addEventListener("click", () => this.followLive());
+      const timeInput = document.getElementById("live-time-input");
+      if (timeInput) {
+        timeInput.addEventListener("change", () => {
+          this._liveFollowing = false;
+          this.selectLiveTime(Number(timeInput.value), false);
+        });
+      }
+
+      // La resistencia y el voltaje pueden corregirse manualmente desde la
+      // configuración declarada. A1 no se convierte en ohmios.
+      ["cfg-c", "cfg-rcharge", "cfg-rdischarge", "cfg-vref"].forEach((id) => {
+        const input = document.getElementById(id);
+        if (!input) return;
+        input.addEventListener("change", () => this.syncLiveReferenceFromInputs());
+      });
+    }
+
+    syncLiveReferenceFromInputs() {
+      const read = (id) => {
+        const input = document.getElementById(id);
+        if (!input || input.value === "") return null;
+        const value = Number(input.value);
+        return Number.isFinite(value) ? value : null;
+      };
+      this.applyLiveReference({
+        capacitancia_f: read("cfg-c"),
+        resistencia_carga_ohm: read("cfg-rcharge"),
+        resistencia_descarga_ohm: read("cfg-rdischarge"),
+        vref_v: read("cfg-vref"),
+      });
+      if (this._latestSample) this.renderLiveCharge(this._latestSample);
+    }
+
+    /**
+     * Aplica el resumen de «Configurar circuito» al laboratorio en vivo.
+     * Actualiza la referencia de q(t), la escena 3D, la gráfica y el panel de
+     * cálculo. El backend recibe los valores equivalentes con un pequeño
+     * retardo para no escribir en cada pulsación.
+     */
+    applyCircuitSummary(summary, options = {}) {
+      if (!summary) return;
+      this._circuitSummary = summary;
+      this.liveRef.c = summary.ceq > 0 ? summary.ceq : this.liveRef.c;
+      this.liveRef.rCharge = summary.reqCarga > 0 ? summary.reqCarga : null;
+      this.liveRef.rDischarge = summary.reqDescarga > 0 ? summary.reqDescarga : null;
+      this.liveRef.ceiling = summary.ve > 0 ? summary.ve : this.liveRef.ceiling;
+      this.liveRef.pending = summary.pending || {};
+      this.liveRef.tau = Core.tauOf(this.liveRef.rCharge, this.liveRef.c);
+      this.liveRef.tauDischarge = Core.tauOf(this.liveRef.rDischarge, this.liveRef.c);
+      this.liveRef.source = summary.ceqSource || "configurado";
+      if (summary.ceq > 0) this.store.setCapacitance(summary.ceq);
+      this.capacitancePartsF = summary.capacitancePartsF;
+      this.updateCapLabel();
+
+      const apply = () => {
+        if (this.charts) {
+          this.charts.setLiveParams({
+            c: this.liveRef.c,
+            rCharge: this.liveRef.rCharge,
+            rDischarge: this.liveRef.rDischarge,
+            tau: this.liveRef.tau,
+            tauDischarge: this.liveRef.tauDischarge,
+            ceiling: this.liveRef.ceiling,
+            pending: this.liveRef.pending,
+          });
+        }
+        if (this.scene) {
+          this.scene.setCapacitance(this.liveRef.c, this.capacitanceParts(this.liveRef.c));
+        }
+        if (this.simulator && this.simulator.setCapacitanceParts) {
+          this.simulator.setCapacitanceParts(summary.capacitancePartsF);
+        }
+        const qmaxEl = document.getElementById("lq-qmax");
+        const qMaxC = Core.qMaxC(this.liveRef.c, this.liveRef.ceiling);
+        if (qmaxEl) {
+          qmaxEl.textContent = qMaxC > 0
+            ? `${this.formatNumber(qMaxC * 1000, 2)} mC`
+            : "—";
+        }
+        const tauEl = document.getElementById("lq-tau");
+        if (tauEl) {
+          tauEl.textContent = Number.isFinite(this.liveRef.tau)
+            ? `${this.formatNumber(this.liveRef.tau, 2)} s`
+            : "—";
+        }
+        if (this._latestSample) this.renderLiveCharge(this._latestSample);
+        else this.renderLiveCharge(null);
+      };
+
+      window.clearTimeout(this._configApplyTimer);
+      this._configApplyTimer = window.setTimeout(apply, options.immediate ? 0 : 90);
+      this.scheduleBackendConfigSync(summary);
+    }
+
+    scheduleBackendConfigSync(summary) {
+      if (!API || typeof API.saveConfig !== "function") return;
+      window.clearTimeout(this._backendSyncTimer);
+      this._backendSyncTimer = window.setTimeout(() => {
+        const body = {};
+        if (summary.ceq > 0) {
+          body.capacitancia_f = summary.ceq;
+          body.capacitancia_origen = summary.ceqSource === "medido" ? "MEDIDO" : "NOMINAL";
+        }
+        if (summary.reqCarga > 0) {
+          body.resistencia_carga_ohm = summary.reqCarga;
+          body.resistencia_origen = summary.reqCargaSource === "medido" ? "MEDIDO" : "NOMINAL";
+        }
+        if (summary.reqDescarga > 0) body.resistencia_descarga_ohm = summary.reqDescarga;
+        if (summary.ve > 0) body.vref_v = summary.ve;
+        if (Object.keys(body).length === 0) return;
+        API.saveConfig(body)
+          .then((data) => {
+            if (this.analysis && data && data.config) this.analysis.applyConfig(data.config);
+          })
+          .catch((error) => console.warn("No se pudo sincronizar /api/config", error));
+      }, 700);
+    }
+
+    /**
+     * Fija la R y la C de referencia de q(t). Para el modo físico, el techo
+     * se toma de A1 en cada muestra; `vref_v` solo es un respaldo.
+     */
+    applyLiveReference(config = {}) {
+      const c = Number(config.capacitancia_f);
+      if (Number.isFinite(c) && c > 0) this.liveRef.c = c;
+      const r = Number(config.resistencia_carga_ohm);
+      if (Number.isFinite(r) && r > 0) this.liveRef.rCharge = r;
+      const rd = Number(config.resistencia_descarga_ohm);
+      if (Number.isFinite(rd) && rd > 0) this.liveRef.rDischarge = rd;
+      const vref = Number(config.vref_v);
+      if (Number.isFinite(vref) && vref > 0 && !this._latestSample) this.liveRef.ceiling = vref;
+      this.liveRef.tau = Core.tauOf(this.liveRef.rCharge, this.liveRef.c);
+      this.liveRef.tauDischarge = Core.tauOf(this.liveRef.rDischarge, this.liveRef.c);
+      if (this.charts) {
+        this.charts.setLiveParams({
+          c: this.liveRef.c,
+          rCharge: this.liveRef.rCharge,
+          rDischarge: this.liveRef.rDischarge,
+          tau: this.liveRef.tau,
+          tauDischarge: this.liveRef.tauDischarge,
+          ceiling: this.liveRef.ceiling,
+        });
+      }
+      if (this.scene) this.scene.setCapacitance(this.liveRef.c, this.capacitanceParts(this.liveRef.c));
+      const tauEl = document.getElementById("lq-tau");
+      if (tauEl) {
+        tauEl.textContent = Number.isFinite(this.liveRef.tau)
+          ? `${this.formatNumber(this.liveRef.tau, 2)} s`
+          : "—";
+      }
+      const qmaxEl = document.getElementById("lq-qmax");
+      const qMaxC = Core.qMaxC(this.liveRef.c, this.liveRef.ceiling);
+      if (qmaxEl) {
+        qmaxEl.textContent = qMaxC > 0 ? `${this.formatNumber(qMaxC * 1000, 2)} mC` : "—";
+      }
+    }
+
+    formatNumber(value, digits = 2) {
+      return Number.isFinite(Number(value))
+        ? Number(value).toFixed(digits).replace(".", ",")
+        : "—";
+    }
+
+    /** Reparto declarado por «Configurar circuito»; si no hay 4, reparto igual. */
+    capacitanceParts(totalF) {
+      if (!(Number(totalF) > 0)) return [0, 0, 0, 0];
+      if (Array.isArray(this.capacitancePartsF) && this.capacitancePartsF.length === 4) {
+        return this.capacitancePartsF.slice();
+      }
+      const each = Number(totalF) / 4;
+      return [each, each, each, each];
+    }
+
+    liveStateFromSample(sample) {
+      const c = this.liveRef.c || this.store.capacitanceF;
+      const voltage = Number(sample.voltaje_tanque) || 0;
+      const measuredCeiling = Number(sample.voltaje_techo);
+      const ceiling = measuredCeiling > 0.05 ? measuredCeiling : this.liveRef.ceiling;
+      const qTotalC = Core.chargeC(c, voltage);
+      const qMaxC = Core.qMaxC(c, ceiling);
+      const parts = this.capacitanceParts(c);
+      const perCapacitorC = parts.map((ci) => ci * voltage);
+      const perCapacitorMaxC = parts.map((ci) => ci * ceiling);
+      const perCapacitorFraction = parts.map((ci, index) => {
+        const max = perCapacitorMaxC[index];
+        return max > 0 ? Core.clamp(perCapacitorC[index] / max, 0, 1) : 0;
+      });
+      return {
+        level: qMaxC > 0 ? Core.clamp(qTotalC / qMaxC, 0, 1) : 0,
+        qTotalC,
+        qMaxC,
+        perCapacitorC,
+        perCapacitorMaxC,
+        perCapacitorFraction,
+        voltage,
+        ceiling,
+        mode: sample.estado === "D" ? "D" : (sample.estado === "C" ? "C" : "S"),
+      };
+    }
+
+    liveStateFromModel(model, selection) {
+      const c = this.liveRef.c || this.store.capacitanceF;
+      const qTotalC = Number(selection && selection.chargeC) || 0;
+      const qMaxC = Number(model && model.qMaxC) || 0;
+      const ceiling = c > 0 ? qMaxC / c : this.liveRef.ceiling;
+      const voltage = c > 0 ? qTotalC / c : 0;
+      const parts = this.capacitanceParts(c);
+      const perCapacitorC = parts.map((ci) => ci * voltage);
+      const perCapacitorMaxC = parts.map((ci) => ci * ceiling);
+      const perCapacitorFraction = parts.map((ci, index) => {
+        const max = perCapacitorMaxC[index];
+        return max > 0 ? Core.clamp(perCapacitorC[index] / max, 0, 1) : 0;
+      });
+      return {
+        level: qMaxC > 0 ? Core.clamp(qTotalC / qMaxC, 0, 1) : 0,
+        qTotalC,
+        qMaxC,
+        perCapacitorC,
+        perCapacitorMaxC,
+        perCapacitorFraction,
+        voltage,
+        ceiling,
+        mode: model && model.mode === "DESCARGA" ? "D" : "C",
+      };
+    }
+
+    updateLiveMeta(sample) {
+      const ceiling = Number(sample && sample.voltaje_techo);
+      if (Number.isFinite(ceiling) && ceiling > 0.05) this.liveRef.ceiling = ceiling;
+      const qMaxC = Core.qMaxC(this.liveRef.c, this.liveRef.ceiling);
+      const qmaxEl = document.getElementById("lq-qmax");
+      if (qmaxEl) {
+        qmaxEl.textContent = qMaxC > 0 ? `${this.formatNumber(qMaxC * 1000, 2)} mC` : "—";
+      }
+      const tauEl = document.getElementById("lq-tau");
+      if (tauEl) {
+        tauEl.textContent = Number.isFinite(this.liveRef.tau)
+          ? `${this.formatNumber(this.liveRef.tau, 2)} s`
+          : "—";
+      }
+    }
+
+    updateLiveHud(model, selection) {
+      const qC = Number(selection && selection.chargeC) || 0;
+      const qMaxC = Number(model && model.qMaxC) || 0;
+      const base = model && model.mode === "DESCARGA" ? Number(model.q0C) || 0 : qMaxC;
+      const pct = base > 0 ? Core.clamp((qC / base) * 100, 0, 100) : 0;
+      const mouse = (id, text) => {
+        const el = document.getElementById(id);
+        if (el) el.textContent = text;
+      };
+      mouse("lq-total", this.formatNumber(qC * 1000, 2));
+      mouse("lq-percent", `${this.formatNumber(pct, 1)} % ${model && model.mode === "DESCARGA" ? "de Q₀" : "de Qmax"}`);
+      mouse("lq-time", `${this.formatNumber(selection && selection.time, 2)} s`);
+      mouse("lq-tau", Number.isFinite(Number(model && model.tau))
+        ? `${this.formatNumber(model.tau, 2)} s`
+        : "—");
+      mouse("lq-qmax", qMaxC > 0 ? `${this.formatNumber(qMaxC * 1000, 2)} mC` : "—");
+    }
+
+    updateLiveTimeControl(model, value) {
+      const slider = document.getElementById("live-time");
+      if (!slider || !model) return;
+      const min = Number.isFinite(model.xStart) ? model.xStart : 0;
+      const max = Number.isFinite(model.xEnd) ? model.xEnd : min + 1;
+      const step = Math.max(0.001, (max - min) / 600);
+      const clamped = Core.clamp(Number(value) || 0, min, max);
+      slider.min = String(min);
+      slider.max = String(max);
+      slider.step = String(step);
+      slider.value = String(clamped);
+      const input = document.getElementById("live-time-input");
+      if (input) {
+        input.min = String(min);
+        input.max = String(max);
+        input.step = String(step);
+        input.value = clamped.toFixed(2);
+      }
+    }
+
+    /**
+     * Comprobación del punto mostrado: q_exp = Ceq · Vc frente a la fórmula
+     * del profesor, variación Δq y tau estimado cuando el dominio lo permite.
+     * En la curva nominal no hay muestra física: se identifica como SIMULACIÓN.
+     */
+    updateLiveCheck(model, selection) {
+      const set = (id, text) => {
+        const el = document.getElementById(id);
+        if (el) el.textContent = text;
+      };
+      const note = document.getElementById("live-check-note");
+      if (!model || !selection) {
+        ["lc-volt", "lc-qexp", "lc-qtheory", "lc-diff", "lc-tauest", "lc-timecalc"].forEach((id) => set(id, "—"));
+        if (note) note.textContent = "Selecciona un instante para comprobar q(t).";
+        return;
+      }
+      const c = Number(model.c) > 0 ? Number(model.c) : this.liveRef.c;
+      const qC = Number(selection.chargeC) || 0;
+      const qMaxC = Number(model.qMaxC) || 0;
+      const q0C = Number(model.q0C) || 0;
+      const qInfC = Number(model.qInfC) || 0;
+      const discharge = String(model.mode || "CARGA").toUpperCase() === "DESCARGA";
+      const samples = Array.isArray(this.store.samples) ? this.store.samples : [];
+      const current = this.store.current || this._latestSample;
+      const synthetic = Boolean(current && String(current.origen || "").toUpperCase() === "SIMULACION");
+      const physical = !model.nominal && samples.length > 0 && !synthetic;
+
+      if (!physical) {
+        const t = Math.max(0, (Number(selection.time) || 0) - (Number(model.xStart) || 0));
+        const voltage = c > 0 ? qC / c : 0;
+        const tauEst = discharge
+          ? Core.tauFromPointDecayC(t, qC, q0C, qInfC)
+          : Core.tauFromPointChargeC(t, qC, qMaxC, q0C);
+        const tCalc = discharge
+          ? Core.timeForDecayC(model.tau, qC, q0C, qInfC)
+          : Core.timeForChargeC(model.tau, qC, qMaxC, q0C);
+        set("lc-volt", `${this.formatNumber(voltage, 2)} V`);
+        set("lc-qexp", `${this.formatNumber(qC * 1000, 2)} mC`);
+        set("lc-qtheory", `${this.formatNumber(qC * 1000, 2)} mC`);
+        set("lc-diff", "0,00 mC");
+        set("lc-tauest", tauEst !== null ? `${this.formatNumber(tauEst, 2)} s` : "—");
+        set("lc-timecalc", tCalc !== null ? `${this.formatNumber(tCalc, 2)} s` : "—");
+        if (note) {
+          note.textContent = synthetic
+            ? "Modo prueba (SIMULACIÓN — DATOS SINTÉTICOS): la comprobación usa el modelo, no una medición del Arduino."
+            : ((tauEst === null || tCalc === null)
+              ? "Curva nominal (SIMULACIÓN): sin datos físicos. En t = 0 o q = 0 no hay estimación válida."
+              : "Curva nominal (SIMULACIÓN): sin datos físicos. La comprobación usa el modelo, no una muestra del Arduino.");
+        }
+        return;
+      }
+
+      // Muestra física más cercana dentro del evento actual.
+      const xStart = Number(model.xStart) || 0;
+      let nearest = null;
+      let best = Infinity;
+      samples.forEach((sample) => {
+        const t = Number(sample.t_rel);
+        if (!Number.isFinite(t) || t < xStart - 1e-9) return;
+        const distance = Math.abs(t - Number(selection.time));
+        if (distance < best) { best = distance; nearest = sample; }
+      });
+      if (!nearest) {
+        if (note) note.textContent = "No hay muestras válidas del evento actual para comprobar.";
+        return;
+      }
+      const measuredV = Number(nearest.voltaje_tanque) || 0;
+      const sampleT = Number(nearest.t_rel) || 0;
+      const elapsed = Math.max(0, sampleT - xStart);
+      const qExp = c * measuredV;
+      const qTheory = Core.chargeAtTimeGeneralC(elapsed, q0C, qInfC, Number(model.tau));
+      const diff = qExp - qTheory;
+      const tauEst = discharge
+        ? Core.tauFromPointDecayC(elapsed, qExp, q0C, qInfC)
+        : Core.tauFromPointChargeC(elapsed, qExp, qMaxC, q0C);
+      const tCalc = discharge
+        ? Core.timeForDecayC(model.tau, qExp, q0C, qInfC)
+        : Core.timeForChargeC(model.tau, qExp, qMaxC, q0C);
+      set("lc-volt", `${this.formatNumber(measuredV, 2)} V`);
+      set("lc-qexp", `${this.formatNumber(qExp * 1000, 2)} mC`);
+      set("lc-qtheory", `${this.formatNumber(qTheory * 1000, 2)} mC`);
+      set("lc-diff", `${diff >= 0 ? "+" : "−"}${this.formatNumber(Math.abs(diff) * 1000, 2)} mC`);
+      set("lc-tauest", tauEst !== null ? `${this.formatNumber(tauEst, 2)} s` : "—");
+      set("lc-timecalc", tCalc !== null ? `${this.formatNumber(tCalc, 2)} s` : "—");
+      if (note) {
+        note.textContent = `Muestra física más cercana: t = ${this.formatNumber(sampleT, 2)} s · q_exp = Ceq · Vc; q teórica con la fórmula del profesor. τ estimado puede variar por ruido y tolerancias.`;
+      }
+    }
+
+    /**
+     * Panel «Comprueba el cálculo» del laboratorio en vivo. Pasa al panel los
+     * equivalentes declarados y, si hay muestras físicas válidas, la misma
+     * muestra más cercana para comparar q(t) con q_exp = Ceq · Vc.
+     */
+    updateCalcPanel(model, selection) {
+      const Calc = global.RCCalc;
+      if (!Calc || !model || !selection) return;
+      const summary = this._circuitSummary || null;
+      const discharge = String(model.mode || "CARGA").toUpperCase() === "DESCARGA";
+      const c = summary && summary.pending && summary.pending.ceq
+        ? null
+        : (Number(summary && summary.ceq) > 0
+          ? Number(summary.ceq)
+          : (Number(model.c) > 0 ? Number(model.c) : this.liveRef.c));
+      const rCharge = Number(summary && summary.reqCarga) > 0
+        ? Number(summary.reqCarga)
+        : (Number(this.liveRef.rCharge) > 0 ? Number(this.liveRef.rCharge) : null);
+      const rDischarge = Number(summary && summary.reqDescarga) > 0
+        ? Number(summary.reqDescarga)
+        : (Number(this.liveRef.rDischarge) > 0 ? Number(this.liveRef.rDischarge) : null);
+      const r = discharge ? rDischarge : rCharge;
+      const tau = Core.tauOf(r, c);
+      // En el montaje físico manda el techo medido por A1. La alimentación
+      // declarada es la referencia de respaldo; si está pendiente, el cálculo
+      // teórico no debe inventar Qmax.
+      let ve = Number(model.ceiling) > 0
+        ? Number(model.ceiling)
+        : (Number(summary && summary.ve) > 0 ? Number(summary.ve) : Number(this.liveRef.ceiling));
+      const xStart = Number(model.xStart) || 0;
+      const t = Math.max(0, (Number(selection.time) || 0) - xStart);
+      const qC = Number(selection.chargeC) || 0;
+      const samples = Array.isArray(this.store.samples) ? this.store.samples : [];
+      const current = this.store.current || this._latestSample;
+      const synthetic = Boolean(current && String(current.origen || "").toUpperCase() === "SIMULACION");
+      const physical = !model.nominal && samples.length > 0 && !synthetic;
+
+      let measured = null;
+      if (physical) {
+        let nearest = null;
+        let best = Infinity;
+        samples.forEach((sample) => {
+          const sampleT = Number(sample.t_rel);
+          if (!Number.isFinite(sampleT) || sampleT < xStart - 1e-9) return;
+          const distance = Math.abs(sampleT - Number(selection.time));
+          if (distance < best) { best = distance; nearest = sample; }
+        });
+        if (nearest) {
+          const voltage = Number(nearest.voltaje_tanque) || 0;
+          measured = {
+            voltage,
+            qC: c * voltage,
+            time: Number(nearest.t_rel) || 0,
+          };
+        }
+      }
+
+      Calc.update("calc-live", {
+        r,
+        rCharge,
+        rDischarge,
+        c,
+        ve,
+        t,
+        qC,
+        qMaxC: model.qMaxC,
+        q0C: model.q0C,
+        qInfC: model.qInfC,
+        v0: c > 0 ? Number(model.q0C) / c : null,
+        mode: model.mode,
+        tau,
+        nominal: Boolean(model.nominal),
+        synthetic,
+        measured,
+        summary,
+        pending: summary ? summary.pending : {},
+        source: synthetic
+          ? "MODO PRUEBA · SIMULACIÓN"
+          : (physical ? "MEDICIÓN FÍSICA" : "REFERENCIA NOMINAL · SIMULACIÓN"),
+        v0Note: synthetic ? "voltaje inicial del emulador" : (physical ? "voltaje inicial medido" : "voltaje inicial nominal"),
+        veNote: synthetic
+          ? "techo del emulador (SIMULACIÓN)"
+          : (physical ? "techo medido por A1" : "voltaje de alimentación configurado"),
+      });
+    }
+
+    /**
+     * Recalcula q(t), el HUD, el nivel 3D y la tarjeta individual para el
+     * instante mostrado. En modo "seguir" usa la última muestra; si el usuario
+     * movió el cursor, conserva el instante elegido.
+     */
+    renderLiveCharge(sample) {
+      if (!this.charts) return;
+      const model = this.charts.buildLiveChargeModel();
+      if (!model) {
+        if (sample) {
+          const state = this.liveStateFromSample(sample);
+          this._liveSceneState = state;
+          if (this.scene) this.scene.setChargeState(state);
+        }
+        return;
+      }
+      let selection;
+      if (this._liveFollowing) {
+        selection = model.selected || { time: model.xStart, chargeC: model.q0C };
+      } else {
+        const time = Core.clamp(
+          this._liveSelection ? this._liveSelection.time : model.selected.time,
+          model.xStart,
+          model.xEnd
+        );
+        const chargeC = Core.chargeAtTimeGeneralC(time - model.xStart, model.q0C, model.qInfC, model.tau);
+        selection = { time, chargeC };
+        this._liveSelection = selection;
+        this.charts.setLiveSelected(selection);
+      }
+      const state = this.liveStateFromModel(model, selection);
+      this._liveSceneState = state;
+      if (this.scene) this.scene.setChargeState(state);
+      this.updateLiveHud(model, selection);
+      this.updateLiveCheck(model, selection);
+      this.updateCalcPanel(model, selection);
+      this.updateLiveTimeControl(model, selection.time);
+      if (this._selectedCapIndex !== undefined && this._selectedCapIndex !== null) {
+        this.showCapacitorCard(this._selectedCapIndex, state);
+      }
+    }
+
+    selectLiveTime(time, fromSlider = false) {
+      if (!this.charts) return;
+      const model = this.charts.buildLiveChargeModel();
+      if (!model) return;
+      const t = Core.clamp(Number(time) || 0, model.xStart, model.xEnd);
+      const chargeC = Core.chargeAtTimeGeneralC(t - model.xStart, model.q0C, model.qInfC, model.tau);
+      this._liveFollowing = false;
+      this._liveSelection = { time: t, chargeC };
+      this.charts.setLiveSelected(this._liveSelection);
+      const state = this.liveStateFromModel(model, this._liveSelection);
+      this._liveSceneState = state;
+      if (this.scene) this.scene.setChargeState(state);
+      this.updateLiveHud(model, this._liveSelection);
+      this.updateLiveCheck(model, this._liveSelection);
+      this.updateCalcPanel(model, this._liveSelection);
+      this.updateLiveTimeControl(model, t);
+      if (this._selectedCapIndex !== undefined && this._selectedCapIndex !== null) {
+        this.showCapacitorCard(this._selectedCapIndex, state);
+      }
+    }
+
+    followLive() {
+      this._liveFollowing = true;
+      this._liveSelection = null;
+      this._selectedCapIndex = null;
+      if (this.charts) this.charts.setLiveSelected(null);
+      const sample = this.store.current || this._latestSample;
+      this.renderLiveCharge(sample || null);
+    }
+
+
+    setPresentationPaused(paused) {
+      const next = Boolean(paused);
+      this._presentationPaused = next;
+      if (this.charts) this.charts.setLivePaused(next || this._userPausedCharts);
+      if (!next) {
+        if (this.store.current) this.renderSample(this.store.current);
+        if (this.charts) this.charts.scheduleLive();
+      }
+    }
+
+    resetLiveCaption() {
+      const title = document.getElementById("live-caption-title");
+      const text = document.getElementById("live-caption-text");
+      if (title) title.textContent = "Sin datos todavía";
+      if (text) text.textContent = " — Inicia una sesión o el Modo prueba y aquí verás qué está ocurriendo en el banco.";
+    }
+
+    updateLiveCaption(sample) {
+      const title = document.getElementById("live-caption-title");
+      const text = document.getElementById("live-caption-text");
+      if (!title || !text) return;
+      const state = sample.estado === "C" ? "Cargando el banco"
+        : sample.estado === "D" ? "Descargando el banco"
+        : "Banco en equilibrio";
+      const voltage = Number(sample.voltaje_tanque);
+      const ceiling = Number(sample.voltaje_techo);
+      const v = Number.isFinite(voltage) ? FMT.number(voltage, 2) : "—";
+      const c = Number.isFinite(ceiling) ? FMT.number(ceiling, 2) : "—";
+      const pct = Number.isFinite(voltage) && Number.isFinite(ceiling) && ceiling > 0.05
+        ? Math.round((voltage / ceiling) * 100)
+        : null;
+      const mode = sample.origen === "SIMULACION" ? "SIMULACIÓN" : "MEDICIÓN REAL";
+      title.textContent = `${mode} — ${state}`;
+      text.textContent = pct === null
+        ? " — Esperando tramas válidas para describir el evento."
+        : ` — ${v} V de ${c} V de techo (${pct} % del recorrido). La carga q = C·Vc se estima a partir del voltaje medido; no es un sensor de carga. El núcleo interno crece o cae con ella y el anillo amarillo marca el techo del potenciómetro.`;
     }
 
     updateMetrics(sample) {
@@ -488,7 +1231,7 @@
       if (!event) {
         box.classList.remove("is-complete");
         title.textContent = "Todavía no hay un cruce característico";
-        text.textContent = "Cuando la señal alcance el 63,2 % de la carga o el 36,8 % restante de la descarga, aparecerá aquí el tiempo experimental.";
+        text.textContent = "Cuando la señal alcance el 63,2 % de la carga o el 36,8 % restante de la descarga, aparecerá aquí el tiempo experimental. 1τ no completa el proceso: una carga práctica (≈99,3 %) requiere cerca de 5τ.";
         return;
       }
       box.classList.add("is-complete");
@@ -505,6 +1248,7 @@
     onTauEvent(event) {
       if (this.scene) this.scene.flashTau && this.scene.flashTau(event);
       this.charts.addTauEvent(event);
+      if (this.testDemo) this.testDemo.onTau(event);
       this.showTauModal(event, false);
       this.showLabAlert(
         `Se alcanzó 1τ de ${event.mode.toLowerCase()} a ${FMT.number(event.voltage_v, 3)} V. La adquisición continúa.`,
@@ -588,8 +1332,8 @@
       if (percent) percent.textContent = `1τ · ${FMT.number(event.percent, 1)} %`;
       if (text) {
         const base = event.mode === "CARGA"
-          ? "En un τ de carga, el condensador ha recorrido el 63,212 % de la variación total entre V₀ y V_f. La curva continuará acercándose al voltaje techo sin alcanzarlo exactamente en un tiempo finito."
-          : "En un τ de descarga queda el 36,788 % de la variación inicial respecto al nivel final. Ese nivel final se mide; no se supone cero.";
+          ? "En un τ de carga, el condensador ha recorrido el 63,212 % de la variación total entre V₀ y V_f. La curva continuará acercándose al voltaje techo sin alcanzarlo exactamente en un tiempo finito: una carga práctica (≈99,3 %) requiere cerca de 5τ, no 1τ."
+          : "En un τ de descarga queda el 36,788 % de la variación inicial respecto al nivel final. Ese nivel final se mide; no se supone cero. Un vaciado práctico (≈99,3 % recorrido) requiere cerca de 5τ.";
         const note = event.provisional
           ? " El nivel final usado para este aviso es provisional; el análisis posterior lo recalcula con la cola de muestras."
           : " El nivel final fue confirmado con las muestras posteriores.";
@@ -613,6 +1357,7 @@
       if (!modal) return;
       modal.classList.add("hidden");
       document.body.style.overflow = "";
+      if (this.testDemo) this.testDemo.resume("tau");
       if (this._pausedByModal) {
         this.charts.setLivePaused(this._userPausedCharts);
         this._pausedByModal = false;
@@ -698,7 +1443,7 @@
           : "—";
       }
       this.renderCurrentSession(session);
-      if (session && session.valid_samples !== undefined) {
+      if (session && session.active && session.valid_samples !== undefined) {
         const samples = document.getElementById("m-samples");
         if (samples) samples.textContent = String(session.valid_samples);
       }
@@ -734,6 +1479,29 @@
         return;
       }
       window.open(API.currentExportUrl(fmt), "_blank");
+    }
+
+    /**
+     * Tras la demostración completa, analiza automáticamente la sesión
+     * sintética más reciente para que el panel de Análisis y sus gráficas
+     * queden poblados. No cambia de pestaña ni interrumpe la presentación.
+     */
+    async analyzeLatestSynthetic() {
+      try {
+        const data = await API.sessions();
+        const synthetic = (data.sessions || [])
+          .filter((session) => String(session.origen || "").toUpperCase() === "SIMULACION")
+          .sort((a, b) => String(b.session_id).localeCompare(String(a.session_id)));
+        if (synthetic.length === 0) return null;
+        const latest = synthetic[0].session_id;
+        if (this.analysis) {
+          await this.analysis.analyzeSession(latest);
+        }
+        return latest;
+      } catch (error) {
+        console.warn("No se pudo analizar automáticamente la sesión sintética.", error);
+        return null;
+      }
     }
 
     async loadSessions() {
@@ -803,8 +1571,12 @@
       const reset = document.getElementById("btn-reset-camera");
       if (reset) reset.addEventListener("click", () => this.scene && this.scene.setView("general", true));
 
-      const practice = document.getElementById("btn-start-practice");
-      if (practice) practice.addEventListener("click", () => this.switchView("view-lab"));
+      document.querySelectorAll(".js-enter-lab").forEach((button) => {
+        button.addEventListener("click", () => this.switchView("view-lab"));
+      });
+      document.querySelectorAll(".js-config").forEach((button) => {
+        button.addEventListener("click", () => this.switchView("view-config"));
+      });
 
       const closeComponent = document.getElementById("btn-close-component");
       if (closeComponent) closeComponent.addEventListener("click", () => this.hideComponentCard());
@@ -821,17 +1593,27 @@
         this.charts.clearLive();
         this.store.reset("limpiar_vista");
         this.renderInsight(null);
+        this.resetLiveCaption();
+        this._latestSample = null;
+        this._liveFollowing = true;
+        this._liveSelection = null;
+        this._liveSceneState = null;
+        this._selectedCapIndex = null;
+        this.charts.liveCleared = true;
+        this.renderLiveCharge(null);
+        this.charts.updateLive(true);
         const tau = document.getElementById("m-tau");
         if (tau) tau.textContent = "—";
         const note = document.getElementById("m-tau-note");
         if (note) note.textContent = "Se calcula al cruzar el umbral";
-        UI.toast("Vista limpiada. La adquisición continúa.", "info");
+        UI.toast("Vista limpiada. La referencia nominal queda en 0 s; la adquisición continúa.", "info");
       });
     }
 
     showComponentCard(component) {
       const card = document.getElementById("component-card");
       if (!card || !component) return;
+      this._selectedCapIndex = null;
       const set = (id, text) => { const el = document.getElementById(id); if (el) el.textContent = text; };
       set("cc-kicker", component.kicker || "Componente");
       set("cc-title", component.title);
@@ -840,9 +1622,57 @@
       card.classList.remove("hidden");
     }
 
+    /**
+     * Ficha de carga individual al seleccionar uno de los cuatro
+     * condensadores: qi(t) = Ci · Vc. La suma coincide con q(t) del banco.
+     */
+    showCapacitorCard(index, snapshot) {
+      const card = document.getElementById("component-card");
+      const state = snapshot || this._liveSceneState;
+      if (!card || !state) return;
+      const i = Number(index);
+      if (!Number.isInteger(i) || i < 0 || i > 3) return;
+      this._selectedCapIndex = i;
+      const perC = Array.isArray(state.perCapacitorC) ? state.perCapacitorC : [];
+      const perMax = Array.isArray(state.perCapacitorMaxC) ? state.perCapacitorMaxC : [];
+      const ceiling = Number(state.ceiling) || 0;
+      const qi = Number(perC[i]) || 0;
+      const qmaxi = Number(perMax[i]) || 0;
+      const parts = this.capacitanceParts(this.liveRef.c);
+      const ciNominal = Number(parts[i]) || (this.liveRef.c / 4);
+      const ci = qmaxi > 0 && ceiling > 0 ? qmaxi / ceiling : ciNominal;
+      const equalParts = parts.every((value) => Math.abs(value - parts[0]) < 1e-15);
+      const nominalText = equalParts
+        ? `hipótesis de 4 × ${this.formatNumber(parts[0] * 1e6, 0)} µF en paralelo`
+        : parts.map((value, idx) => `C${idx + 1} = ${this.formatNumber(value * 1e6, 0)} µF`).join(" · ");
+      const pct = qmaxi > 0 ? Core.clamp((qi / qmaxi) * 100, 0, 100) : 0;
+      const total = perC.reduce((sum, q) => sum + (Number(q) || 0), 0);
+      const voltage = Number(state.voltage) || 0;
+      const set = (id, text) => { const el = document.getElementById(id); if (el) el.textContent = text; };
+      set("cc-kicker", `CONDENSADOR ${i + 1} · CARGA INDIVIDUAL`);
+      set("cc-title", `q${i + 1}(t) = ${this.formatNumber(qi * 1000, 2)} mC`);
+      set("cc-what", `q${i + 1} = C${i + 1} · Vc = ${this.formatNumber(ci * 1e6, 0)} µF × ${this.formatNumber(voltage, 2)} V. Capacitancia nominal: ${nominalText}.`);
+      set("cc-role", `Nivel interno: ${this.formatNumber(pct, 1)} % de su Qmax. Σ qi = ${this.formatNumber(total * 1000, 2)} mC, igual a la carga total q(t) del banco.`);
+      card.classList.remove("hidden");
+    }
+
     hideComponentCard() {
       const card = document.getElementById("component-card");
       if (card) card.classList.add("hidden");
+    }
+
+    showSceneDiagnostic(message) {
+      const container = document.getElementById("scene-live");
+      if (!container) return;
+      let box = container.querySelector(".scene-diagnostic");
+      if (!box) {
+        box = document.createElement("div");
+        box.className = "scene-diagnostic";
+        container.appendChild(box);
+      }
+      box.innerHTML = `<strong>Escena 3D no disponible</strong><p></p><small>Diagnóstico: ${UI.escapeHtml(message)}</small>`;
+      box.querySelector("p").textContent =
+        "El resto del laboratorio sigue operativo. Puedes usar las gráficas, el modo prueba y las sesiones.";
     }
 
     setSimulationVisual(active) {

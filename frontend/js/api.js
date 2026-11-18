@@ -59,7 +59,7 @@
     ports: () => request("/api/ports"),
     connect: (port, baudrate = 9600) => request("/api/connect", { method: "POST", body: { port, baudrate } }),
     disconnect: () => request("/api/disconnect", { method: "POST" }),
-    startSynthetic: () => request("/api/synthetic/start", { method: "POST" }),
+    startSynthetic: (options = {}) => request("/api/synthetic/start", { method: "POST", body: options }),
     stopSynthetic: () => request("/api/synthetic/stop", { method: "POST" }),
     status: () => request("/api/status"),
     diagnostics: () => request("/api/diagnostics"),

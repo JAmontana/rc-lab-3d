@@ -73,16 +73,18 @@ sketch_oct5a/
 │   ├── math_engine.py               # Modelos RC, ajuste, segmentos, incertidumbre
 │   └── session_manager.py           # Persistencia atómica, historial, CSV/JSON
 ├── frontend/
-│   ├── index.html                   # 5 vistas de la aplicación
+│   ├── index.html                   # 6 vistas de la aplicación
 │   ├── css/styles.css               # Tema de laboratorio claro
 │   └── js/
 │       ├── core.js                  # Matemática pura y TauTracker
 │       ├── api.js                   # Cliente REST
 │       ├── store.js                 # Buffer de telemetría
+│       ├── circuit-config.js        # Configuración declarada del circuito
 │       ├── circuit3d.js             # Escena 3D
 │       ├── charts.js                # Gráficas Plotly
 │       ├── analysis.js              # Panel de análisis
 │       ├── simulator.js             # Simulador independiente
+│       ├── calc.js                  # Panel «Comprueba el cálculo» (vivo y simulación)
 │       ├── app.js                   # Controlador principal
 │       └── vendor/                  # three.min.js, OrbitControls.js, plotly.min.js
 ├── tests/
@@ -92,11 +94,14 @@ sketch_oct5a/
 │   ├── test_serial_manager.py
 │   ├── test_session_manager.py
 │   ├── test_backend.py
-│   └── frontend/core.test.js        # Pruebas Node del núcleo matemático
+│   └── frontend/                    # Pruebas Node: core, configuración, cálculo y modos
 ├── data_sessions/                   # Sesiones y archivos históricos (no borrar)
 ├── requirements.txt
+├── render.yaml                     # Despliegue en Render Free (PORT y /health)
 ├── start.ps1
 ├── start.bat
+├── publicar.ps1                     # Túnel HTTPS temporal (Cloudflare)
+├── publicar.bat
 └── README.md
 ```
 
@@ -105,7 +110,7 @@ sketch_oct5a/
 ## 4. Requisitos
 
 - Windows 10/11 (probado en Windows 11).
-- Python 3.10 o superior (probado con **Python 3.14.5**).
+- Python 3.12 o superior (probado con **Python 3.14.5**).
 - Node.js 18+ solo para ejecutar las pruebas del frontend (probado con
   **Node 24.21.0**).
 - Arduino Uno con el firmware cargado y cable USB.
@@ -162,7 +167,51 @@ Documentación interactiva de la API:
 http://127.0.0.1:8000/docs
 ```
 
-### 5.4 Cómo detener el sistema
+### 5.4 Acceso público temporal (HTTPS)
+
+El servidor local sigue siendo el mismo FastAPI de siempre. Para compartir la
+interfaz con un compañero o con el profesor se usa un **Cloudflare Quick
+Tunnel**: no requiere cuenta, entrega una URL `https://…trycloudflare.com` y
+transporta también el WebSocket `/ws/live`.
+
+1. En una ventana, arranque el laboratorio normalmente:
+
+```powershell
+.\start.ps1
+```
+
+2. En otra ventana, abra el túnel:
+
+```powershell
+.\publicar.ps1
+```
+
+Si `cloudflared` no está instalado, el script muestra las opciones. La forma
+más simple es dejar que lo descargue en `tools\`:
+
+```powershell
+.\publicar.ps1 -Descargar
+```
+
+También puede instalarlo con `winget install --id Cloudflare.cloudflared` o
+descargar `cloudflared-windows-amd64.exe` desde
+<https://github.com/cloudflare/cloudflared/releases/latest> y renombrarlo como
+`tools\cloudflared.exe`.
+
+3. Copie la URL que aparece en la línea `https://…trycloudflare.com` y
+   compártala. El Modo prueba funciona igual que en local.
+
+Notas:
+
+- La URL es **temporal**: cambia en cada ejecución y deja de funcionar al
+  cerrar `publicar.ps1` con **Ctrl+C**.
+- El túnel no cambia pines, firmware, protocolo R1 ni la arquitectura.
+- No expone el Arduino a Internet más allá de la interfaz web: el hardware
+  sigue conectado por USB al computador que ejecuta `start.ps1`.
+- Si el túnel se cae, vuelva a ejecutar `.\publicar.ps1`; no es necesario
+  reiniciar el servidor local.
+
+### 5.5 Cómo detener el sistema
 
 - Presione **Ctrl+C** en la ventana donde corre `start.ps1`; el `finally` del
   script cierra Uvicorn y libera el puerto serial.
@@ -176,18 +225,72 @@ Get-NetTCPConnection -LocalPort 8000 -State Listen |
 No es necesario desconectar el Arduino antes de cerrar la aplicación, pero el
 condensador **no se descarga** por cerrar el software ni por desconectar USB.
 
+### 5.6 Publicación en Render (plan Free)
+
+El archivo `render.yaml` deja preparado el servicio web:
+
+- Build: `pip install -r requirements.txt`.
+- Arranque: `uvicorn backend.app:app --host 0.0.0.0 --port $PORT`.
+- Health check: `/health`.
+- Python 3.12.8 y `PYTHONUNBUFFERED=1`.
+
+Pasos (requieren autorización en GitHub y Render):
+
+1. Suba el proyecto a un repositorio de GitHub (rama `main`).
+2. En Render, elija **New → Blueprint** y conecte el repositorio. Render leerá
+   `render.yaml`.
+3. Espere el build y compruebe que `https://<servicio>.onrender.com/health`
+   responde `{"status":"ok"}`.
+
+El almacenamiento de Render Free es efímero: las sesiones guardadas se pierden
+al reiniciar el servicio. El Modo prueba y la simulación funcionan sin Arduino.
+No se necesita ninguna clave ni archivo `.env`.
+
 ---
 
 ## 6. Uso de la interfaz
 
+### Recorrido del estudiante
+
+1. **Configurar circuito**: declara resistencias (Ω) y condensadores (µF),
+   elige serie o paralelo, asigna cada resistencia a carga, descarga o ambas,
+   escribe el voltaje de alimentación y, si lo conoce, un valor medido de
+   R<sub>eq</sub> o C<sub>eq</sub>. El panel derecho muestra las fórmulas y los
+   equivalentes calculados.
+2. **Entrar al laboratorio**: conecta el Arduino o usa **Modo prueba**.
+3. **Observar carga y descarga**: gráfica de q(t), HUD y cuatro condensadores 3D.
+4. **Comprobar cálculo**: copia los ocho pasos en la hoja.
+
+### Configurar circuito
+
+- Los valores de fábrica son la configuración base documentada:
+  4 × 1000 µF en paralelo y una resistencia de 4700 Ω marcada como
+  **valor ilustrativo**. No son mediciones certificadas.
+- Si falta un dato, el resumen y el laboratorio muestran
+  «Dato pendiente de configurar»; no se inventa un resultado.
+- Los cambios se guardan en `localStorage` y actualizan la gráfica, la escena
+  3D, el simulador y los paneles de cálculo.
+- La sincronización con `/api/config` envía solo los equivalentes calculados
+  (C<sub>eq</sub>, R de carga, R de descarga y V<sub>e</sub>).
+
 ### Laboratorio en vivo
 
-- Seleccione el puerto COM y pulse **Conectar USB**.
-- Sin hardware, pulse **Modo Test** para generar datos sintéticos.
+- Seleccione el puerto COM y pulse **Conectar Arduino**.
+- Sin hardware, pulse **Modo prueba** para generar datos sintéticos; esos datos se
+  etiquetan como SIMULACIÓN y nunca se presentan como mediciones del Arduino.
 - La conexión solo se declara activa tras recibir y validar una trama `R1`.
 - Visualiza voltaje del tanque, voltaje techo, estado, PWM, LEDs, frecuencia de
   muestreo y calidad de la señal.
 - La escena 3D y la gráfica en vivo son protagonistas (aprox. 60–65 % / 35–40 %).
+- **Comprueba el cálculo** muestra, con los valores configurados:
+  1. datos y unidades; 2. C<sub>eq</sub>; 3. R<sub>eq</sub> del proceso;
+  4. τ = R<sub>eq</sub> · C<sub>eq</sub>; 5. Q<sub>max</sub> = C<sub>eq</sub> · V<sub>e</sub>;
+  6. ecuación de carga o descarga; 7. sustitución numérica; 8. resultado en C y mC.
+- Al mover el instante se actualizan la sustitución, el resultado, la gráfica y
+  los cuatro condensadores 3D.
+- Con datos físicos compara la curva teórica con
+  `q_exp = C_eq · Vc` de la muestra Arduino más cercana y muestra la diferencia.
+  Sin datos físicos, la referencia se identifica como SIMULACIÓN.
 
 ### Análisis científico
 
@@ -200,9 +303,13 @@ condensador **no se descarga** por cerrar el software ni por desconectar USB.
 
 ### Simulación
 
-- Simulador RC ideal independiente del hardware.
-- Permite variar R, C, V0, Vf, duración y número de puntos.
-- Etiqueta permanente **SIMULACION**; nunca se mezcla con sesiones reales.
+- Simulador RC ideal independiente del hardware y del puerto serial.
+- Permite variar R de carga, R de descarga, C, V0, Vf, duración y velocidad.
+- Etiqueta permanente **SIMULACIÓN — DATOS SINTÉTICOS**; nunca se mezcla con
+  sesiones reales ni se presenta como medición.
+- Funciona sin Arduino conectado; solo requiere el servidor local.
+- Sus ocho pasos de «Comprueba el cálculo» usan exactamente el mismo modelo que
+  la gráfica y los condensadores 3D.
 
 ### Conoce el laboratorio
 
@@ -413,7 +520,7 @@ $env:PYTHONDONTWRITEBYTECODE = "1"
 .\.venv\Scripts\python.exe -m pytest -p no:cacheprovider -q
 ```
 
-Resultado verificado en este equipo: **104 pruebas aprobadas**.
+Resultado verificado en este equipo: **107 pruebas aprobadas**.
 
 Cubren parser, modelos, protocolo, motor matemático, segmentos,
 interpolación, ajuste, incertidumbre, simulador, sesiones, exportación,
@@ -425,10 +532,13 @@ concurrencia serial, endpoints REST, WebSocket y diagnóstico.
 node --test "tests/frontend/*.test.js"
 ```
 
-Resultado verificado: **17 pruebas aprobadas**.
+Resultado verificado: **58 pruebas aprobadas**.
 
 Cubren constantes, modelos RC, energía, `millis()`, interpolación de cruces,
-asíntota, `TauTracker` de carga/descarga, señales estables y reinicios.
+asíntota, `TauTracker` de carga/descarga, señales estables y reinicios; además,
+equivalencias serie/paralelo de R y C, τ y Q<sub>max</sub>, configuración
+declarada, estados pendientes, los ocho pasos del cálculo, separación
+física/simulación y navegación de las seis vistas.
 
 ### Lo que las pruebas NO demuestran
 
@@ -446,8 +556,8 @@ asíntota, `TauTracker` de carga/descarga, señales estables y reinicios.
 | Compilación del firmware | **Pendiente**: no hay `arduino-cli` en el equipo |
 | Carga en Arduino Uno | **Pendiente**: no hay hardware conectado |
 | Lectura real de A0/A1 | **Pendiente** de verificación física |
-| Resistencia de carga | **No medida**; valor nominal 4,7 kΩ sin tolerancia declarada |
-| Resistencia de descarga | **No medida**; `None` por defecto |
+| Resistencia de carga | **No medida**; valor por defecto 4,7 kΩ marcado como ilustrativo |
+| Resistencia de descarga | **No medida**; configurable en la UI; por defecto 4,7 kΩ ilustrativa |
 | Capacitancia | Nominal 4 × 1000 µF = 0,004 F, sin calibración |
 | Topología de descarga | **Pendiente**; la escena 3D es un esquema conceptual |
 | Referencia ADC | Hipótesis 5,0 V |
@@ -489,7 +599,7 @@ aplicación.
 | No aparecen puertos COM | Revisar cable USB y controladores CH340/Arduino |
 | Conecta pero no hay datos | Esperar la primera trama; el Arduino reinicia al abrir el puerto |
 | Datos obsoletos | Revisar cable, baudios y que otro programa no use el puerto |
-| Gráficas vacías | Conectar el Arduino o activar **Modo Test** |
+| Gráficas vacías | Conectar el Arduino o activar **Modo prueba** |
 | Error al exportar | Verificar que la sesión exista y que `data_sessions/` sea escribible |
 | La interfaz no carga | Confirmar que Uvicorn escucha en `http://127.0.0.1:8000` |
 
@@ -515,7 +625,9 @@ aplicación.
 | Parser y protocolo | Implementado y probado |
 | Motor matemático | Implementado y verificado con datos sintéticos |
 | Frontend 3D y gráficas | Implementado; sintaxis validada y recursos servidos correctamente |
+| Configurar circuito | Implementado; equivalencias y estados pendientes probados |
+| Comprueba el cálculo | Implementado en vivo y simulación (8 pasos, C y mC) |
 | Sesiones y exportación | Implementado y probado |
-| Pruebas backend | 104/104 aprobadas |
-| Pruebas frontend | 17/17 aprobadas |
+| Pruebas backend | 107/107 aprobadas |
+| Pruebas frontend | 58/58 aprobadas |
 | Validación con hardware | **Pendiente y declarada** |

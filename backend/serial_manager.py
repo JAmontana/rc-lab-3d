@@ -42,6 +42,7 @@ class SerialManager:
         self.is_running: bool = False
         self.is_synthetic: bool = False
         self.has_valid_frame: bool = False
+        self.synthetic_plan: Optional[Dict[str, Any]] = None
 
         self._lock = threading.RLock()
         self._generation = 0
@@ -164,6 +165,7 @@ class SerialManager:
         self.is_synthetic = False
         self.has_valid_frame = False
         self.opened_at_monotonic = None
+        self.synthetic_plan = None
 
         port = self.serial_port
         self.serial_port = None
@@ -259,6 +261,8 @@ class SerialManager:
         r_ohm: float = 4700.0,
         c_farad: float = 0.004,
         voltaje_techo_v: float = 4.0,
+        speed: float = 8.0,
+        scenario: str = "completo",
     ) -> Tuple[bool, str]:
         with self._lock:
             self._stop_locked()
@@ -267,6 +271,12 @@ class SerialManager:
 
             if r_ohm <= 0 or c_farad <= 0:
                 return False, "R y C deben ser positivos para el emulador"
+            if scenario not in {"completo", "carga", "descarga"}:
+                return False, "Escenario sintético no válido"
+
+            speed = max(1.0, min(50.0, float(speed)))
+            tau = max(0.1, float(r_ohm) * float(c_farad))
+            phases = {"completo": ["C", "D"], "carga": ["C"], "descarga": ["D"]}[scenario]
 
             self.parser = SerialParser()
             self.stats = self._initial_stats()
@@ -281,36 +291,75 @@ class SerialManager:
             self.last_protocol = PROTOCOLO_ACTUAL
             self.opened_at_monotonic = time.monotonic()
             self.stats["connection_state"] = "SIMULACION_ACTIVA"
+            self.synthetic_plan = {
+                "scenario": scenario,
+                "speed": speed,
+                "tau_s": round(tau, 4),
+                "phase_s": round(5.0 * tau, 4),
+                "total_s": round(5.0 * tau * len(phases), 4),
+                "real_duration_s": round(5.0 * tau * len(phases) / speed, 3),
+                "phases": list(phases),
+                "ceiling_v": float(voltaje_techo_v),
+            }
 
             self._synthetic_thread = threading.Thread(
                 target=self._synthetic_loop,
-                args=(generation, float(r_ohm), float(c_farad), float(voltaje_techo_v)),
+                args=(
+                    generation,
+                    float(r_ohm),
+                    float(c_farad),
+                    float(voltaje_techo_v),
+                    speed,
+                    tuple(phases),
+                ),
                 name=f"synthetic-{generation}",
                 daemon=True,
             )
             self._synthetic_thread.start()
             return True, "Emulador de pruebas iniciado. Los datos se identifican como SIMULACION."
 
+    def get_synthetic_plan(self) -> Optional[Dict[str, Any]]:
+        with self._lock:
+            return dict(self.synthetic_plan) if self.synthetic_plan else None
+
     def _synthetic_loop(
-        self, generation: int, r_ohm: float, c_farad: float, voltaje_techo_v: float
+        self,
+        generation: int,
+        r_ohm: float,
+        c_farad: float,
+        voltaje_techo_v: float,
+        speed: float,
+        phases: Tuple[str, ...],
     ) -> None:
         tau = max(0.1, r_ohm * c_farad)
         techo = min(5.0, max(0.1, voltaje_techo_v))
         ganancia = (1_000_000.0 + 470_000.0) / 470_000.0
-        duracion_fase = max(4.0, 3.0 * tau)
+        duracion_fase = 5.0 * tau
 
-        inicio = time.monotonic()
-        fase_inicio = inicio
-        fase = "C"
+        # El reloj de la simulación avanza `speed` veces más rápido que el
+        # reloj real. Las marcas de tiempo y las ecuaciones RC siguen siendo
+        # coherentes; solo se acorta la espera didáctica.
+        sim_time = 0.0
+        last_wall = time.monotonic()
+        phase_index = 0
+
         while self._is_current(generation):
-            ahora = time.monotonic()
-            tiempo_fase = ahora - fase_inicio
-            if tiempo_fase >= duracion_fase:
-                fase = "D" if fase == "C" else "C"
-                fase_inicio = ahora
-                tiempo_fase = 0.0
+            now = time.monotonic()
+            delta = max(0.0, now - last_wall)
+            last_wall = now
+            sim_time += delta * speed
 
-            if fase == "C":
+            while (
+                phase_index + 1 < len(phases)
+                and sim_time >= duracion_fase * (phase_index + 1)
+            ):
+                phase_index += 1
+
+            phase = phases[phase_index]
+            phase_start = duracion_fase * phase_index
+            tiempo_fase = max(0.0, min(duracion_fase, sim_time - phase_start))
+
+            if phase == "C":
                 v0 = 0.0
                 vf = techo
                 voltaje = vf - (vf - v0) * math.exp(-tiempo_fase / tau)
@@ -329,7 +378,7 @@ class SerialManager:
             voltaje = max(0.0, min(30.0, voltaje))
             adc_a0 = int(round(min(5.0, max(0.0, (voltaje / ganancia))) / 5.0 * ADC_MAX))
             adc_a1 = int(round(min(5.0, max(0.0, techo)) / 5.0 * ADC_MAX))
-            millis = int((ahora - inicio) * 1000.0) & 0xFFFFFFFF
+            millis = int(sim_time * 1000.0) & 0xFFFFFFFF
 
             line = (
                 f"R1,{millis},{voltaje:.3f},{techo:.3f},{estado},{pwm},"
@@ -340,7 +389,7 @@ class SerialManager:
             if sample is not None:
                 self._emit_sample(sample, generation)
 
-            siguiente = (int(ahora / (PERIODO_TELEMETRIA_MS / 1000.0)) + 1) * (
+            siguiente = (int(now / (PERIODO_TELEMETRIA_MS / 1000.0)) + 1) * (
                 PERIODO_TELEMETRIA_MS / 1000.0
             )
             time.sleep(max(0.005, siguiente - time.monotonic()))

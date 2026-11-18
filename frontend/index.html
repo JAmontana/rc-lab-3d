@@ -6,6 +6,7 @@
   <title>RC LAB 3D — Laboratorio universitario de carga y descarga</title>
   <meta name="description" content="Laboratorio interactivo para estudiar la carga y descarga de un banco de condensadores con Arduino Uno.">
   <link rel="stylesheet" href="css/styles.css">
+  <link rel="icon" type="image/svg+xml" href="assets/brand/favicon.svg">
   <script src="js/vendor/three.min.js" defer></script>
   <script src="js/vendor/OrbitControls.js" defer></script>
   <script src="js/vendor/plotly.min.js" defer></script>
@@ -15,9 +16,8 @@
 
   <header class="topbar">
     <div class="brand">
-      <div class="brand-mark" aria-hidden="true">
-        <span></span><span></span><span></span>
-      </div>
+      <img class="brand-logo" src="assets/brand/logo.svg" alt="" width="42" height="42"
+           onerror="this.classList.add('hidden')">
       <div>
         <div class="brand-title">RC LAB <strong>3D</strong></div>
         <div class="brand-subtitle">Laboratorio universitario de circuitos RC</div>
@@ -41,20 +41,161 @@
   </header>
 
   <nav class="tabs" aria-label="Secciones del laboratorio">
-    <button class="tab is-active" data-view="view-lab" aria-selected="true">Laboratorio en vivo</button>
-    <button class="tab" data-view="view-analysis" aria-selected="false">Análisis científico</button>
+    <button class="tab is-active" data-view="view-learn" aria-selected="true">Conoce el laboratorio</button>
+    <button class="tab" data-view="view-config" aria-selected="false">Configurar circuito</button>
+    <button class="tab" data-view="view-lab" aria-selected="false">Laboratorio en vivo</button>
     <button class="tab" data-view="view-sim" aria-selected="false">Simulación</button>
-    <button class="tab" data-view="view-learn" aria-selected="false">Conoce el laboratorio</button>
+    <button class="tab" data-view="view-analysis" aria-selected="false">Análisis científico</button>
     <button class="tab" data-view="view-sessions" aria-selected="false">Sesiones</button>
   </nav>
 
   <main id="main-content" class="main">
 
-    <!-- ============================ LABORATORIO EN VIVO ============================ -->
-    <section id="view-lab" class="view is-active" aria-labelledby="lab-title">
-      <h1 id="lab-title" class="sr-only">Laboratorio en vivo</h1>
+    <!-- ============================ CONFIGURAR CIRCUITO ============================ -->
+    <section id="view-config" class="view" aria-labelledby="config-title">
+      <div class="section-head">
+        <div>
+          <span class="section-kicker kicker-cyan">Paso 1 · Antes de empezar</span>
+          <h1 id="config-title">Configurar circuito</h1>
+          <p>Declara qué componentes tienes y cómo están conectados. El laboratorio usará estos valores para calcular R<sub>eq</sub>, C<sub>eq</sub>, τ y q(t). Los valores marcados como ilustrativos o nominales no son mediciones.</p>
+        </div>
+        <div class="panel-tools">
+          <button class="btn btn-ghost" id="btn-config-reset">Restaurar base documentada</button>
+          <button class="btn btn-primary" id="btn-config-continue">Guardar y entrar al laboratorio →</button>
+        </div>
+      </div>
 
-      <div class="metric-strip">
+      <div class="config-layout">
+        <div class="config-main">
+          <section class="panel config-panel">
+            <div class="panel-head">
+              <div>
+                <h2>Resistencias</h2>
+                <p class="panel-sub">Añade cada resistencia y marca si participa en la carga, en la descarga o en ambas.</p>
+              </div>
+              <div class="config-tools">
+                <label class="field compact-field">Conexión
+                  <select id="cfg-res-topology">
+                    <option value="serie">Serie</option>
+                    <option value="paralelo">Paralelo</option>
+                  </select>
+                </label>
+                <button class="btn btn-small" id="btn-add-resistor">+ Añadir resistencia</button>
+              </div>
+            </div>
+            <div id="cfg-resistors-list" class="component-list"></div>
+            <p class="hint config-hint">Serie: R<sub>eq</sub> = R1 + R2 + … · Paralelo: 1/R<sub>eq</sub> = 1/R1 + 1/R2 + …</p>
+          </section>
+
+          <section class="panel config-panel">
+            <div class="panel-head">
+              <div>
+                <h2>Condensadores</h2>
+                <p class="panel-sub">Cada valor se escribe en microfaradios (µF). El banco documentado es 4 × 1000 µF en paralelo.</p>
+              </div>
+              <div class="config-tools">
+                <label class="field compact-field">Conexión
+                  <select id="cfg-cap-topology">
+                    <option value="paralelo" selected>Paralelo</option>
+                    <option value="serie">Serie</option>
+                  </select>
+                </label>
+                <button class="btn btn-small" id="btn-add-capacitor">+ Añadir condensador</button>
+              </div>
+            </div>
+            <div id="cfg-capacitors-list" class="component-list"></div>
+            <p class="hint config-hint">Paralelo: C<sub>eq</sub> = C1 + C2 + … · Serie: 1/C<sub>eq</sub> = 1/C1 + 1/C2 + …</p>
+          </section>
+
+          <section class="panel config-panel">
+            <div class="panel-head">
+              <div>
+                <h2>Alimentación y valores medidos</h2>
+                <p class="panel-sub">Los campos de medición son opcionales: úsalos solo si conoces el valor con un instrumento.</p>
+              </div>
+            </div>
+            <div class="form-grid config-form">
+              <label class="field">Voltaje de alimentación V<sub>e</sub> (V)
+                <input id="cfg-supply" type="number" min="0.1" step="0.1" value="5">
+              </label>
+              <label class="field">C<sub>eq</sub> medida (µF)
+                <input id="cfg-measured-c" type="number" min="0.000001" step="1" placeholder="Opcional">
+              </label>
+              <label class="field">R<sub>eq</sub> de carga medida (Ω)
+                <input id="cfg-measured-r-charge" type="number" min="1" step="10" placeholder="Opcional">
+              </label>
+              <label class="field">R<sub>eq</sub> de descarga medida (Ω)
+                <input id="cfg-measured-r-discharge" type="number" min="1" step="10" placeholder="Opcional">
+              </label>
+            </div>
+          </section>
+        </div>
+
+        <aside class="panel config-summary" aria-labelledby="config-summary-title">
+          <div class="panel-head">
+            <div>
+              <h2 id="config-summary-title">Equivalentes calculados</h2>
+              <p class="panel-sub">Resultado de las fórmulas serie/paralelo.</p>
+            </div>
+          </div>
+          <div id="cfg-summary" class="config-summary-body"></div>
+          <p class="hint">Al guardar, estos valores actualizan la gráfica, la escena 3D y los cálculos del laboratorio.</p>
+        </aside>
+      </div>
+    </section>
+
+    <!-- ============================ LABORATORIO EN VIVO ============================ -->
+    <section id="view-lab" class="view" aria-labelledby="lab-title">
+      <div class="lab-intro">
+        <div>
+          <h1 id="lab-title">Carga y descarga en tiempo real</h1>
+          <p>Elige un instante y comprueba la misma carga en la gráfica y en los cuatro condensadores. No necesitas conocer la fórmula para empezar.</p>
+        </div>
+        <ol class="lab-steps" aria-label="Cómo usar la pantalla principal">
+          <li><b>1</b> Elige un instante</li>
+          <li><b>2</b> Lee la carga</li>
+          <li><b>3</b> Compárala con la fórmula</li>
+        </ol>
+      </div>
+
+      <details class="fold-panel" id="demo-fold">
+        <summary>Demostración guiada con datos sintéticos (opcional)</summary>
+        <section class="test-console" id="test-console" aria-labelledby="test-console-title">
+        <div class="test-console-head">
+          <span class="test-badge">SIMULACIÓN — DATOS SINTÉTICOS</span>
+          <div class="test-console-title">
+            <strong id="test-console-title">Recorrido de demostración</strong>
+            <span id="test-status" class="test-status" role="status">Listo para iniciar una nueva demostración.</span>
+          </div>
+          <div class="test-progress" aria-hidden="true"><span id="test-progress-fill"></span></div>
+        </div>
+        <div class="test-controls">
+          <button class="btn btn-primary" id="btn-test-start">Iniciar demostración</button>
+          <button class="btn" id="btn-test-pause" disabled>Pausar presentación</button>
+          <button class="btn" id="btn-test-continue" disabled>Continuar</button>
+          <button class="btn btn-ghost" id="btn-test-reset">Reiniciar demostración</button>
+          <label class="test-field">Escenario
+            <select id="test-scenario" class="select">
+              <option value="completo" selected>Completo: carga + descarga</option>
+              <option value="carga">Solo carga</option>
+              <option value="descarga">Solo descarga</option>
+            </select>
+          </label>
+          <label class="test-field">Voltaje techo
+            <select id="test-ceiling" class="select">
+              <option value="3">3,0 V</option>
+              <option value="4" selected>4,0 V</option>
+              <option value="5">5,0 V</option>
+            </select>
+          </label>
+        </div>
+        <p class="test-note" id="test-note">La pausa didáctica detiene solo la presentación; la adquisición y el almacenamiento continúan. Los datos sintéticos se guardan en una sesión aparte y nunca se mezclan con el Arduino.</p>
+        </section>
+      </details>
+
+      <details class="fold-panel" id="tech-fold">
+        <summary>Datos técnicos de la conexión y de la sesión</summary>
+        <div class="metric-strip">
         <article class="metric metric-voltage">
           <span class="metric-label">Voltaje del condensador</span>
           <span class="metric-value"><span id="m-voltage">0.000</span><small>V</small></span>
@@ -85,7 +226,8 @@
           <span class="metric-value"><span id="m-samples">0</span><small>válidas</small></span>
           <span class="metric-note" id="m-invalid">0 inválidas · 0 descartadas</span>
         </article>
-      </div>
+        </div>
+      </details>
 
       <div class="lab-grid">
         <section class="panel scene-panel" aria-labelledby="scene-title">
@@ -156,29 +298,164 @@
               <div class="energy-meta"><span id="m-charge-note">Q = C · V</span><span id="m-cap-value">C = 0.004 F</span></div>
             </div>
           </div>
+          <div class="live-caption" id="live-caption" role="status" aria-live="polite">
+            <span class="caption-dot" aria-hidden="true"></span>
+            <p><strong id="live-caption-title">Sin datos todavía</strong><span id="live-caption-text"> — Inicia una sesión o el Modo prueba y aquí verás qué está ocurriendo en el banco.</span></p>
+          </div>
         </section>
 
         <section class="panel chart-panel" aria-labelledby="live-chart-title">
           <div class="panel-head">
             <div>
-              <h2 id="live-chart-title">Evolución del voltaje</h2>
-              <p class="panel-sub" id="live-chart-sub">Voltaje del condensador contra tiempo</p>
+              <h2 id="live-chart-title">Carga eléctrica almacenada en función del tiempo — q(t)</h2>
+              <p class="panel-sub" id="live-chart-sub">q(t) = Qmax · (1 − e<sup>−t/τ</sup>) · Qmax = C<sub>eq</sub> · V<sub>e</sub></p>
             </div>
             <div class="panel-tools">
+              <span class="tag hidden" id="live-data-badge">SIN DATOS FÍSICOS · CURVA NOMINAL</span>
               <button class="btn btn-small" id="btn-live-pause" aria-pressed="false">Pausar vista</button>
               <button class="btn btn-small" id="btn-live-clear">Limpiar</button>
             </div>
           </div>
+          <div class="charge-hud" aria-live="polite">
+            <div class="charge-hud-main">
+              <span class="charge-hud-label">Carga total</span>
+              <span class="charge-hud-value"><span id="lq-total">0.00</span><small>mC</small></span>
+              <span class="charge-hud-pct" id="lq-percent">0,0 % de Qmax</span>
+            </div>
+            <div class="charge-hud-item"><span>Tiempo</span><strong id="lq-time">0.00 s</strong></div>
+            <div class="charge-hud-item"><span>Tau</span><strong id="lq-tau">—</strong></div>
+            <div class="charge-hud-item"><span>Qmax</span><strong id="lq-qmax">—</strong></div>
+          </div>
+          <div class="check-strip" aria-live="polite">
+            <div class="check-item"><span>V medido</span><strong id="lc-volt">—</strong></div>
+            <div class="check-item"><span>q = C · Vc</span><strong id="lc-qexp">—</strong></div>
+            <div class="check-item"><span>q teórica</span><strong id="lc-qtheory">—</strong></div>
+            <div class="check-item"><span>Diferencia</span><strong id="lc-diff">—</strong></div>
+            <div class="check-item"><span>τ estimado</span><strong id="lc-tauest">—</strong></div>
+            <div class="check-item"><span>t para q</span><strong id="lc-timecalc">—</strong></div>
+          </div>
+          <p class="check-note" id="live-check-note">Sin datos físicos: se muestra la curva nominal de referencia (SIMULACIÓN).</p>
+          <div class="time-strip">
+            <label for="live-time">Instante seleccionado</label>
+            <input type="range" id="live-time" min="0" max="1" step="0.01" value="0"
+                   aria-label="Instante seleccionado para calcular q(t)">
+            <input id="live-time-input" class="time-number" type="number" min="0" step="0.1" value="0"
+                   aria-label="Instante en segundos">
+            <span class="time-unit">s</span>
+            <button class="btn btn-small" id="btn-live-now">Ahora</button>
+          </div>
           <div id="chart-live" class="plot plot-live"></div>
+          <details class="chart-explain">
+            <summary>¿Qué representa q(t)?</summary>
+            <p>La cantidad de carga eléctrica almacenada en el banco en un instante. Eje X: tiempo (s). Eje Y: carga (mC). La curva verde es el modelo Qmax(1−e<sup>−t/τ</sup>); la cian es la carga <em>estimada</em> a partir del voltaje medido (q = C·Vc), no un sensor de carga. En 1τ se alcanza el 63,2 % de Qmax; con 5τ, ≈99,3 %. Mueve el cursor para ver el mismo instante en los cuatro condensadores 3D.</p>
+          </details>
+          <p class="charge-glossary"><strong>q(t)</strong> carga en el instante · <strong>Qmax</strong> carga máxima teórica · <strong>τ = R · C</strong> constante del circuito · <strong>63,2 %</strong> a 1τ · <strong>99,3 %</strong> a 5τ</p>
           <div id="tau-insight" class="insight">
             <div class="insight-icon">τ</div>
             <div>
               <strong id="tau-insight-title">Todavía no hay un cruce característico</strong>
-              <p id="tau-insight-text">Cuando la señal alcance el 63,2 % de la carga o el 36,8 % restante de la descarga, aparecerá aquí el tiempo experimental.</p>
+              <p id="tau-insight-text">Cuando la señal alcance el 63,2 % de la carga o el 36,8 % restante de la descarga, aparecerá aquí el tiempo experimental. 1τ no completa el proceso: una carga práctica (≈99,3 %) requiere cerca de 5τ.</p>
             </div>
           </div>
         </section>
       </div>
+
+      <section class="panel calc-panel" id="calc-live" aria-labelledby="calc-live-title">
+        <div class="panel-head">
+          <div>
+            <h2 id="calc-live-title">Comprueba el cálculo</h2>
+            <p class="panel-sub">Copia estos ocho pasos en tu hoja. Al cambiar el instante, la sustitución y el resultado se actualizan.</p>
+          </div>
+          <span class="tag" id="calc-live-badge">REFERENCIA NOMINAL</span>
+        </div>
+        <p class="calc-warning hidden" id="calc-live-warning">Dato pendiente de configurar.</p>
+        <div class="calc-body calc-body-steps">
+          <ol class="calc-steps">
+            <li class="calc-step">
+              <span class="calc-step-num">1</span>
+              <div class="calc-step-body">
+                <h3>Datos del circuito y sus unidades</h3>
+                <dl class="calc-data">
+                  <div><dt>Voltaje de referencia V<sub>e</sub></dt><dd id="calc-live-ve">—</dd><small id="calc-live-ve-note">—</small></div>
+                  <div><dt>Tiempo t</dt><dd id="calc-live-t">—</dd><small>desde el inicio del proceso</small></div>
+                  <div><dt>Resistencia de carga R<sub>carga</sub></dt><dd id="calc-live-r">—</dd><small id="calc-live-r-note">—</small></div>
+                  <div><dt>Resistencia de descarga R<sub>descarga</sub></dt><dd id="calc-live-rd">—</dd><small id="calc-live-rd-note">—</small></div>
+                  <div><dt>Capacitancia equivalente C<sub>eq</sub></dt><dd id="calc-live-c">—</dd><small id="calc-live-c-note">—</small></div>
+                  <div class="calc-data-wide"><dt>Componentes declarados</dt><dd id="calc-live-components" class="calc-data-text">—</dd><small>Configurar circuito · valores declarados, no medidos</small></div>
+                </dl>
+              </div>
+            </li>
+            <li class="calc-step">
+              <span class="calc-step-num">2</span>
+              <div class="calc-step-body">
+                <h3>Cálculo de C<sub>eq</sub></h3>
+                <p>Capacidad total del banco. En paralelo se suman; en serie se suman los inversos.</p>
+                <code id="calc-live-ceq">—</code>
+              </div>
+            </li>
+            <li class="calc-step">
+              <span class="calc-step-num">3</span>
+              <div class="calc-step-body">
+                <h3>Cálculo de R<sub>eq</sub></h3>
+                <p>Resistencia equivalente del proceso que estás observando: carga o descarga.</p>
+                <code id="calc-live-req">—</code>
+              </div>
+            </li>
+            <li class="calc-step">
+              <span class="calc-step-num">4</span>
+              <div class="calc-step-body">
+                <h3>Constante de tiempo: τ = R<sub>eq</sub> × C<sub>eq</sub></h3>
+                <p>τ es el tiempo en el que el proceso recorre el 63,2 % de la variación.</p>
+                <code id="calc-live-tau">—</code>
+              </div>
+            </li>
+            <li class="calc-step">
+              <span class="calc-step-num">5</span>
+              <div class="calc-step-body">
+                <h3>Carga máxima: Q<sub>max</sub> = C<sub>eq</sub> × V<sub>e</sub></h3>
+                <p>Q<sub>max</sub> es la carga que almacenaría el banco si llegara al voltaje de referencia.</p>
+                <code id="calc-live-qmax">—</code>
+              </div>
+            </li>
+            <li class="calc-step">
+              <span class="calc-step-num">6</span>
+              <div class="calc-step-body">
+                <h3>Ecuación de carga o descarga</h3>
+                <p id="calc-live-formula">q(t) = Qmax · (1 − e<sup>−t/τ</sup>)</p>
+              </div>
+            </li>
+            <li class="calc-step">
+              <span class="calc-step-num">7</span>
+              <div class="calc-step-body">
+                <h3>Sustitución numérica completa</h3>
+                <code id="calc-live-subst">—</code>
+              </div>
+            </li>
+            <li class="calc-step calc-step-result">
+              <span class="calc-step-num">8</span>
+              <div class="calc-step-body">
+                <h3>Resultado final en culombios y milicoulombios</h3>
+                <p id="calc-live-result-step">—</p>
+              </div>
+            </li>
+          </ol>
+          <aside class="calc-side">
+            <div class="calc-result">
+              <span>Resultado teórico q(t)</span>
+              <strong id="calc-live-result">—</strong>
+              <em id="calc-live-result-mc">—</em>
+              <small id="calc-live-pct">—</small>
+            </div>
+            <div class="calc-compare-grid">
+              <div><span>Teórico a mano</span><strong id="calc-live-theory">—</strong></div>
+              <div><span>Experimental</span><strong id="calc-live-exp">—</strong></div>
+              <div><span>Diferencia</span><strong id="calc-live-diff">—</strong></div>
+            </div>
+            <p class="calc-compare" id="calc-live-compare">—</p>
+            <p class="calc-glossary"><strong>R</strong> resistencia en ohmios (Ω) · <strong>C</strong> capacitancia en faradios (F) · <strong>V</strong> voltaje en voltios (V) · <strong>q</strong> carga en culombios (C) · <strong>mC</strong> milicoulombios (1 mC = 0,001 C) · <strong>e</strong> ≈ 2,718 · <strong>t</strong> tiempo en segundos (s).</p>
+          </aside>
+        </div>
+      </section>
 
       <div class="session-strip">
         <div class="session-info">
@@ -215,7 +492,7 @@
 
       <div class="analysis-layout">
         <aside class="panel params-panel" aria-labelledby="params-title">
-          <div class="panel-head"><h2 id="params-title">Parámetros del circuito</h2></div>
+          <div class="panel-head"><h2 id="params-title">Parámetros de calibración y análisis</h2></div>
           <div class="form-grid">
             <label class="field">Capacitancia C (F)
               <input id="cfg-c" type="number" min="0.000001" step="0.0001" value="0.004">
@@ -274,27 +551,27 @@
             <article class="panel chart-card">
               <div class="panel-head"><h3>Carga del condensador</h3><span class="tag" id="tag-charge">63,2 %</span></div>
               <div id="chart-charge" class="plot plot-analysis"></div>
-              <p class="what">¿Qué nos demuestra? La carga sigue una exponencial que se acerca al voltaje techo. En un τ ha recorrido el 63,2 % de la variación total.</p>
+              <div class="chart-explain"><strong>¿Qué estás viendo?</strong><p>Cómo se <em>llena</em> el banco: de V₀ hasta el techo. Eje X: tiempo del evento (s). Eje Y: voltaje (V). Observa el <em>punto 1τ</em>: ahí la curva recorrió el <em>63,2 %</em> de la variación. Conclusión: si τ experimental difiere mucho del teórico, revisa R y C reales.</p></div>
             </article>
             <article class="panel chart-card">
               <div class="panel-head"><h3>Descarga del condensador</h3><span class="tag" id="tag-discharge">36,8 %</span></div>
               <div id="chart-discharge" class="plot plot-analysis"></div>
-              <p class="what">¿Qué nos demuestra? En un τ queda el 36,8 % de la variación inicial respecto al nivel final. El nivel final se mide, no se supone cero.</p>
+              <div class="chart-explain"><strong>¿Qué estás viendo?</strong><p>Cómo se <em>vacía</em> el banco: en 1τ queda el <em>36,8 %</em> de la variación inicial. Eje X: tiempo del evento (s). Eje Y: voltaje (V). El nivel final V_f <em>se mide</em>, no se supone cero. Si τ difiere mucho del teórico, revisa la trayectoria de descarga.</p></div>
             </article>
             <article class="panel chart-card">
               <div class="panel-head"><h3>Carga eléctrica almacenada</h3><span class="tag">Q = C · V</span></div>
               <div id="chart-charge-q" class="plot plot-analysis"></div>
-              <p class="what">¿Qué nos demuestra? La carga acumulada crece con el voltaje. El incremento útil se expresa como ΔQ = C · (V − V₀).</p>
+              <div class="chart-explain"><strong>¿Qué estás viendo?</strong><p>La <em>carga eléctrica Q = C · V</em> almacenada, en culombios (C). Eje X: tiempo (s). Eje Y: carga (C). Crece casi como una exponencial: más voltaje, más carga. Útil para comparar sesiones con distinto techo.</p></div>
             </article>
             <article class="panel chart-card">
               <div class="panel-head"><h3>Energía almacenada y liberada</h3><span class="tag">E = ½ · C · V²</span></div>
               <div id="chart-energy" class="plot plot-analysis"></div>
-              <p class="what">¿Qué nos demuestra? La energía depende del cuadrado del voltaje: no cambia linealmente. Al descargar, esa energía se disipa en el circuito.</p>
+              <div class="chart-explain"><strong>¿Qué estás viendo?</strong><p>La <em>energía E = ½ · C · V²</em> almacenada, en julios (J). Eje X: tiempo (s). Eje Y: energía (J). Observa que crece con el <em>cuadrado</em> del voltaje: duplicar V cuadruplica la energía.</p></div>
             </article>
             <article class="panel chart-card chart-wide">
               <div class="panel-head"><h3>Residuos del ajuste</h3><span class="tag">experimental − modelo</span></div>
               <div id="chart-residuals" class="plot plot-analysis"></div>
-              <p class="what">¿Qué nos demuestra? Si los residuos tienen estructura y no se distribuyen alrededor de cero, el modelo RC ideal no describe todo el comportamiento. El MOSFET y el control activo pueden explicar desviaciones.</p>
+              <div class="chart-explain"><strong>¿Qué estás viendo?</strong><p>Los <em>residuos</em> del ajuste exponencial (experimental − modelo). Eje X: tiempo (s). Eje Y: diferencia (V). Deben distribuirse <em>alrededor de cero</em> sin patrón. Si hay estructura, el modelo ideal no basta: revisa el MOSFET y el control activo.</p></div>
             </article>
           </div>
 
@@ -309,40 +586,128 @@
         <div>
           <h1 id="sim-title">Simulación teórica <span class="sim-inline-badge">SIMULACIÓN</span></h1>
           <p>Modelo RC ideal independiente. No se mezcla con sesiones reales ni genera identificadores de laboratorio.</p>
+          <p class="sim-synthetic-banner">SIMULACIÓN — DATOS SINTÉTICOS · no son mediciones del Arduino</p>
         </div>
       </div>
 
+      <div class="tau-hero panel" aria-labelledby="tau-hero-title">
+        <div class="tau-hero-main">
+          <span class="tau-kicker" id="tau-hero-title">Constante de tiempo — τ</span>
+          <div class="tau-value" aria-live="polite">
+            <span id="sim-tau-big">18.80</span><small>s</small>
+          </div>
+          <p class="tau-formula">τ = R · C <span class="tau-arrow">→</span> V<sub>C</sub>(τ) = V<sub>f</sub> − (V<sub>f</sub> − V<sub>0</sub>) · e<sup>−1</sup></p>
+          <p class="tau-note">Una constante de tiempo representa el tiempo necesario para alcanzar el <strong>63,2 %</strong> de la variación durante la carga o conservar el <strong>36,8 %</strong> durante la descarga. Alcanzar 1τ <strong>no</strong> significa que el condensador esté completamente cargado o descargado: la carga práctica (≈ 99,3 %) requiere cerca de 5τ.</p>
+        </div>
+        <dl class="tau-hero-grid">
+          <div class="tau-cell cell-r"><dt>Resistencia R</dt><dd id="sim-tau-r">4700 Ω</dd></div>
+          <div class="tau-cell cell-c"><dt>Capacitancia C</dt><dd id="sim-tau-c">0,004 F</dd></div>
+          <div class="tau-cell cell-5t"><dt>Tiempo de 5τ</dt><dd id="sim-tau-5t">94,0 s</dd></div>
+          <div class="tau-cell cell-v0"><dt>Voltaje inicial V₀</dt><dd id="sim-tau-v0">0,0 V</dd></div>
+          <div class="tau-cell cell-vf"><dt>Voltaje final V_f</dt><dd id="sim-tau-vf">5,0 V</dd></div>
+          <div class="tau-cell cell-charge"><dt>Punto de carga · 63,2 %</dt><dd id="sim-tau-charge-point">— V</dd></div>
+          <div class="tau-cell cell-discharge"><dt>Punto de descarga · 36,8 %</dt><dd id="sim-tau-discharge-point">— V</dd></div>
+          <div class="tau-cell cell-ref"><dt>τ teórico de referencia</dt><dd id="sim-tau-ref">18,8 s <small>(4,7 kΩ × 0,004 F)</small></dd></div>
+        </dl>
+      </div>
+
       <div class="sim-layout">
-        <aside class="panel params-panel">
-          <div class="panel-head"><h2>Condiciones de simulación</h2></div>
-          <div class="form-grid">
-            <label class="field">Modo
-              <select id="sim-mode">
-                <option value="CARGA">Carga</option>
-                <option value="DESCARGA">Descarga</option>
-              </select>
-            </label>
-            <label class="field">Resistencia R (Ω)
-              <input id="sim-r" type="number" min="1" step="100" value="4700">
-            </label>
-            <label class="field">Capacitancia C (F)
-              <input id="sim-c" type="number" min="0.000001" step="0.0001" value="0.004">
-            </label>
-            <label class="field">Voltaje techo (V)
-              <input id="sim-vf" type="number" min="0" max="5" step="0.1" value="4.0">
-            </label>
-            <label class="field">Voltaje inicial (V)
-              <input id="sim-v0" type="number" min="0" max="30" step="0.1" value="0">
-            </label>
-            <label class="field">Duración (s)
-              <input id="sim-duration" type="number" min="0.5" step="1" value="60">
-            </label>
+        <aside class="panel params-panel params-redesigned" aria-labelledby="params-sim-title">
+          <div class="panel-head params-head">
+            <div>
+              <h2 id="params-sim-title">Controles de simulación y análisis</h2>
+              <p class="panel-sub">Configura las variables del modelo matemático y verifica el experimento sin conectar hardware.</p>
+            </div>
+            <span class="sim-badge sim-badge-inline">SIMULACIÓN</span>
           </div>
-          <p class="hint" id="sim-tau-hint">τ = 18.80 s · 1τ = 18.80 s · 5τ ≈ 94.0 s</p>
-          <div class="session-actions">
-            <button class="btn btn-primary" id="btn-sim-run">Reproducir en 3D</button>
-            <button class="btn btn-ghost hidden" id="btn-sim-stop">Detener simulación</button>
-          </div>
+
+          <!-- GRUPO 1 · Variables del circuito -->
+          <section class="control-group group-variables" aria-labelledby="group-variables-title">
+            <div class="group-head">
+              <span class="group-icon group-icon-cyan" aria-hidden="true">Ω</span>
+              <h3 id="group-variables-title">Variables del circuito</h3>
+            </div>
+            <div class="control-grid">
+              <label class="field control-field" title="Limita la corriente de carga del banco">Resistencia de carga (Ω)
+                <input id="sim-r" type="number" min="1" step="100" value="4700">
+                <small>Trayectoria de carga. Motor de τ</small>
+              </label>
+              <label class="field control-field" title="A1 mide voltaje techo, no resistencia. Elige el origen del valor de R.">Origen de la resistencia
+                <select id="sim-r-source">
+                  <option value="nominal" selected>Nominal 4,7 kΩ</option>
+                  <option value="manual">Manual / calibrada</option>
+                </select>
+                <small>A1 no se convierte en ohmios</small>
+              </label>
+              <label class="field control-field" title="Hipótesis de trayectoria de descarga">Resistencia de descarga (Ω)
+                <input id="sim-rdischarge" type="number" min="1" step="100" value="4700">
+                <small>Hipótesis; verificar en el montaje</small>
+              </label>
+              <label class="field control-field" title="4 × 1000 µF en paralelo">Capacitancia equivalente (µF)
+                <input id="sim-c" type="number" min="1" step="100" value="4000">
+                <small>4 × 1000 µF en paralelo = 0,004 F</small>
+              </label>
+              <label class="field control-field" title="Nivel inicial del banco">Voltaje inicial (V)
+                <input id="sim-v0" type="number" min="0" max="30" step="0.1" value="0">
+                <small>Nivel con el banco descargado</small>
+              </label>
+              <label class="field control-field" title="Techo fijado por el potenciómetro">Voltaje techo (V)
+                <input id="sim-vf" type="number" min="0" max="5" step="0.1" value="5.0">
+                <small>Referencia A1 (potenciómetro)</small>
+              </label>
+            </div>
+          </section>
+
+          <!-- GRUPO 2 · Configuración del experimento -->
+          <section class="control-group group-experiment" aria-labelledby="group-experiment-title">
+            <div class="group-head">
+              <span class="group-icon group-icon-blue" aria-hidden="true">▶</span>
+              <h3 id="group-experiment-title">Configuración del experimento</h3>
+            </div>
+            <div class="control-grid control-grid-2">
+              <label class="field control-field" title="Carga o descarga del banco">Tipo de evento
+                <select id="sim-mode">
+                  <option value="CARGA">Carga</option>
+                  <option value="DESCARGA">Descarga</option>
+                </select>
+                <small>Sentido del intercambio</small>
+              </label>
+              <label class="field control-field" title="Aceleración visual; el tiempo modelado no cambia">Velocidad de reproducción
+                <select id="sim-speed">
+                  <option value="1">×1 (tiempo real)</option>
+                  <option value="2" selected>×2</option>
+                  <option value="4">×4</option>
+                  <option value="8">×8</option>
+                </select>
+                <small>Aceleración visual; τ no cambia</small>
+              </label>
+              <label class="field control-field" title="Duración total del registro">Duración (s)
+                <input id="sim-duration" type="number" min="0.5" step="1" value="60">
+                <small>≥ 5τ recomendado</small>
+              </label>
+            </div>
+            <div class="button-row">
+              <button class="btn btn-secondary" id="btn-sim-apply">Aplicar parámetros</button>
+              <button class="btn btn-ghost" id="btn-sim-reset">Reiniciar simulación</button>
+              <button class="btn btn-primary" id="btn-sim-run">Reproducir en 3D</button>
+              <button class="btn btn-ghost hidden" id="btn-sim-stop">Detener simulación</button>
+            </div>
+          </section>
+
+          <!-- GRUPO 3 · Resultados -->
+          <section class="control-group group-results" aria-labelledby="group-results-title">
+            <div class="group-head">
+              <span class="group-icon group-icon-green" aria-hidden="true">τ</span>
+              <h3 id="group-results-title">Resultados</h3>
+            </div>
+            <dl class="result-mini">
+              <div class="result-mini-item item-charge"><dt>τ de carga</dt><dd id="sim-tau-charge">—</dd></div>
+              <div class="result-mini-item item-discharge"><dt>τ de descarga</dt><dd id="sim-tau-discharge">—</dd></div>
+              <div class="result-mini-item item-five"><dt>Tiempo de 5τ</dt><dd id="sim-tau-5t-mini">—</dd></div>
+              <div class="result-mini-item item-pct"><dt>Porcentaje característico</dt><dd id="sim-tau-pct">63,2 %</dd></div>
+            </dl>
+          </section>
+          <p class="params-note"><strong>Hardware físico:</strong> estos controles son de referencia y calibración del modelo; no modifican la resistencia, la capacitancia ni el divisor real. En modo Test, el emulador usa estos mismos valores.</p>
         </aside>
 
         <div class="sim-main">
@@ -369,118 +734,345 @@
             </div>
           </section>
 
-          <article class="panel chart-card">
-            <div class="panel-head"><h3>Curva teórica RC</h3><span class="tag" id="sim-tau-tag">τ = —</span></div>
+          <article class="panel chart-card charge-chart-card">
+            <div class="panel-head">
+              <div>
+                <h3>Carga eléctrica almacenada en función del tiempo — q(t)</h3>
+                <p class="panel-sub" id="sim-charge-formula">q(t) = Qmax · (1 − e<sup>−t/τ</sup>) · Qmax = C<sub>eq</sub> · V<sub>e</sub></p>
+              </div>
+              <span class="tag" id="sim-tau-tag">τ = —</span>
+            </div>
+            <div class="charge-hud" aria-live="polite">
+              <div class="charge-hud-main">
+                <span class="charge-hud-label">Carga total</span>
+                <span class="charge-hud-value"><span id="sq-total">0.00</span><small>mC</small></span>
+                <span class="charge-hud-pct" id="sq-percent">0,0 % de Qmax</span>
+              </div>
+              <div class="charge-hud-item"><span>Tiempo</span><strong id="sq-time">0.00 s</strong></div>
+              <div class="charge-hud-item"><span>Tau</span><strong id="sq-tau">—</strong></div>
+              <div class="charge-hud-item"><span>Qmax</span><strong id="sq-qmax">—</strong></div>
+            </div>
+            <div class="check-strip" aria-live="polite">
+              <div class="check-item"><span>Vc = q / C</span><strong id="sc-volt">—</strong></div>
+              <div class="check-item"><span>q seleccionada</span><strong id="sc-q">—</strong></div>
+              <div class="check-item"><span>% Qmax</span><strong id="sc-pct">—</strong></div>
+              <div class="check-item"><span>τ estimado</span><strong id="sc-tauest">—</strong></div>
+              <div class="check-item"><span>t para q</span><strong id="sc-timecalc">—</strong></div>
+            </div>
+            <p class="check-note" id="sc-note">Comprobación: el tiempo recalculado debe coincidir con el instante y τ estimado con R · C.</p>
+            <div class="time-strip">
+              <label for="sim-time">Instante seleccionado</label>
+              <input type="range" id="sim-time" min="0" max="1" step="0.01" value="0"
+                     aria-label="Instante seleccionado para calcular q(t)">
+              <input id="sim-time-input" class="time-number" type="number" min="0" step="0.1" value="0"
+                     aria-label="Instante en segundos">
+              <span class="time-unit">s</span>
+              <button class="btn btn-small" id="btn-sim-time-zero">0 s</button>
+              <button class="btn btn-small" id="btn-sim-time-tau">1τ</button>
+            </div>
             <div id="chart-sim" class="plot plot-sim"></div>
-            <p class="what" id="sim-what">La simulación reproduce las ecuaciones de carga y descarga. No representa una medición física.</p>
+            <div class="q-help-bar">
+              <button class="btn btn-small" id="btn-q-help" aria-expanded="false" aria-controls="q-help">¿Qué significa?</button>
+              <span class="sim-cap-note" id="sim-cap-note">Hipótesis nominal: 4 × 1000 µF en paralelo. Clic en un condensador para ver su carga individual.</span>
+            </div>
+            <div id="q-help" class="q-help hidden" role="region" aria-label="Ayuda de la gráfica de carga">
+              <div><strong>¿Qué representa q(t)?</strong><p>La cantidad de carga eléctrica almacenada en el banco de condensadores en un instante determinado. Se calcula con q = C · Vc a partir del voltaje y se dibuja en miliculombios (mC).</p></div>
+              <div><strong>¿Qué significa 1τ?</strong><p>Es el tiempo t = R · C. En carga se alcanza el 63,2 % de Qmax; en descarga todavía queda el 36,8 % de la carga inicial (no es el porcentaje descargado).</p></div>
+              <div><strong>¿Qué sucede después?</strong><p>La carga continúa acercándose al máximo sin igualarlo. Después de cinco constantes de tiempo (5τ) se llega a ≈ 99,3 %, que es la carga práctica.</p></div>
+            </div>
+            <p class="charge-glossary"><strong>q(t)</strong> carga en el instante · <strong>Qmax</strong> carga máxima teórica · <strong>τ = R · C</strong> constante del circuito · <strong>63,2 %</strong> a 1τ · <strong>99,3 %</strong> a 5τ</p>
           </article>
         </div>
       </div>
+
+      <section class="panel calc-panel" id="calc-sim" aria-labelledby="calc-sim-title">
+        <div class="panel-head">
+          <div>
+            <h2 id="calc-sim-title">Comprueba el cálculo</h2>
+            <p class="panel-sub">Los mismos ocho pasos, con los valores del modelo. Estos datos son sintéticos y no son mediciones del Arduino.</p>
+          </div>
+          <span class="tag" id="calc-sim-badge">SIMULACIÓN — DATOS SINTÉTICOS</span>
+        </div>
+        <p class="calc-warning hidden" id="calc-sim-warning">Dato pendiente de configurar.</p>
+        <div class="calc-body calc-body-steps">
+          <ol class="calc-steps">
+            <li class="calc-step">
+              <span class="calc-step-num">1</span>
+              <div class="calc-step-body">
+                <h3>Datos del circuito y sus unidades</h3>
+                <dl class="calc-data">
+                  <div><dt>Voltaje de referencia V<sub>e</sub></dt><dd id="calc-sim-ve">—</dd><small id="calc-sim-ve-note">—</small></div>
+                  <div><dt>Tiempo t</dt><dd id="calc-sim-t">—</dd><small>instante seleccionado en la gráfica</small></div>
+                  <div><dt>Resistencia de carga R<sub>carga</sub></dt><dd id="calc-sim-r">—</dd><small id="calc-sim-r-note">—</small></div>
+                  <div><dt>Resistencia de descarga R<sub>descarga</sub></dt><dd id="calc-sim-rd">—</dd><small id="calc-sim-rd-note">—</small></div>
+                  <div><dt>Capacitancia equivalente C<sub>eq</sub></dt><dd id="calc-sim-c">—</dd><small id="calc-sim-c-note">—</small></div>
+                  <div class="calc-data-wide"><dt>Componentes declarados</dt><dd id="calc-sim-components" class="calc-data-text">—</dd><small>Valores del modelo de simulación, no componentes físicos</small></div>
+                </dl>
+              </div>
+            </li>
+            <li class="calc-step">
+              <span class="calc-step-num">2</span>
+              <div class="calc-step-body">
+                <h3>Cálculo de C<sub>eq</sub></h3>
+                <p>Capacidad total del banco. En paralelo se suman; en serie se suman los inversos.</p>
+                <code id="calc-sim-ceq">—</code>
+              </div>
+            </li>
+            <li class="calc-step">
+              <span class="calc-step-num">3</span>
+              <div class="calc-step-body">
+                <h3>Cálculo de R<sub>eq</sub></h3>
+                <p>Resistencia equivalente del proceso simulado: carga o descarga.</p>
+                <code id="calc-sim-req">—</code>
+              </div>
+            </li>
+            <li class="calc-step">
+              <span class="calc-step-num">4</span>
+              <div class="calc-step-body">
+                <h3>Constante de tiempo: τ = R<sub>eq</sub> × C<sub>eq</sub></h3>
+                <p>τ es el tiempo en el que el proceso recorre el 63,2 % de la variación.</p>
+                <code id="calc-sim-tau">—</code>
+              </div>
+            </li>
+            <li class="calc-step">
+              <span class="calc-step-num">5</span>
+              <div class="calc-step-body">
+                <h3>Carga máxima: Q<sub>max</sub> = C<sub>eq</sub> × V<sub>e</sub></h3>
+                <p>Q<sub>max</sub> es la carga que almacenaría el banco si llegara al voltaje de referencia.</p>
+                <code id="calc-sim-qmax">—</code>
+              </div>
+            </li>
+            <li class="calc-step">
+              <span class="calc-step-num">6</span>
+              <div class="calc-step-body">
+                <h3>Ecuación de carga o descarga</h3>
+                <p id="calc-sim-formula">q(t) = Qmax · (1 − e<sup>−t/τ</sup>)</p>
+              </div>
+            </li>
+            <li class="calc-step">
+              <span class="calc-step-num">7</span>
+              <div class="calc-step-body">
+                <h3>Sustitución numérica completa</h3>
+                <code id="calc-sim-subst">—</code>
+              </div>
+            </li>
+            <li class="calc-step calc-step-result">
+              <span class="calc-step-num">8</span>
+              <div class="calc-step-body">
+                <h3>Resultado final en culombios y milicoulombios</h3>
+                <p id="calc-sim-result-step">—</p>
+              </div>
+            </li>
+          </ol>
+          <aside class="calc-side">
+            <div class="calc-result">
+              <span>Resultado teórico q(t)</span>
+              <strong id="calc-sim-result">—</strong>
+              <em id="calc-sim-result-mc">—</em>
+              <small id="calc-sim-pct">—</small>
+            </div>
+            <div class="calc-compare-grid">
+              <div><span>Teórico a mano</span><strong id="calc-sim-theory">—</strong></div>
+              <div><span>Experimental</span><strong id="calc-sim-exp">—</strong></div>
+              <div><span>Diferencia</span><strong id="calc-sim-diff">—</strong></div>
+            </div>
+            <p class="calc-compare" id="calc-sim-compare">Parámetros deterministas de la simulación; no son mediciones del Arduino.</p>
+            <p class="calc-glossary"><strong>R</strong> resistencia en ohmios (Ω) · <strong>C</strong> capacitancia en faradios (F) · <strong>V</strong> voltaje en voltios (V) · <strong>q</strong> carga en culombios (C) · <strong>mC</strong> milicoulombios (1 mC = 0,001 C) · <strong>e</strong> ≈ 2,718 · <strong>t</strong> tiempo en segundos (s).</p>
+          </aside>
+        </div>
+      </section>
     </section>
 
     <!-- ============================ CONOCE EL LABORATORIO ============================ -->
-    <section id="view-learn" class="view" aria-labelledby="learn-title">
-      <div class="learn-hero">
-        <div>
-          <span class="kicker">Antes de empezar</span>
-          <h1 id="learn-title">Conoce el laboratorio</h1>
-          <p>RC LAB 3D estudia cómo se cargan y descargan cuatro condensadores de 1000 µF conectados en paralelo. Un Arduino Uno controla el montaje y mide el voltaje del banco; esta aplicación convierte esas mediciones en una escena 3D, gráficas y resultados matemáticos.</p>
-          <button class="btn btn-primary" id="btn-start-practice">Comenzar práctica</button>
+    <section id="view-learn" class="view is-active" aria-labelledby="learn-title">
+      <!-- Portada -->
+      <div class="cover panel">
+        <div class="cover-copy">
+          <span class="cover-kicker">Laboratorio universitario · Electrónica</span>
+          <h1 class="cover-title" id="learn-title">RC LAB <span>3D</span></h1>
+          <p class="cover-sub">Laboratorio interactivo de carga y descarga de condensadores.</p>
+          <p class="cover-phrase">«Observa la energía. Comprende el tiempo. Experimenta con la electrónica».</p>
+          <div class="cover-actions">
+            <button class="btn btn-cover js-config" id="btn-cover-config">1 · CONFIGURAR CIRCUITO</button>
+            <button class="btn btn-cover btn-cover-secondary js-enter-lab" id="btn-start-practice">2 · ENTRAR AL LABORATORIO <span aria-hidden="true">→</span></button>
+            <span class="cover-note">Sin instalación · Funciona en cualquier navegador</span>
+          </div>
+          <ol class="student-flow" aria-label="Recorrido del estudiante">
+            <li><b>1</b> Configurar circuito</li>
+            <li><b>2</b> Entrar al laboratorio</li>
+            <li><b>3</b> Observar carga y descarga</li>
+            <li><b>4</b> Comprobar cálculo</li>
+          </ol>
+          <ul class="cover-tags" aria-label="Características">
+            <li><i class="tag-dot dot-cyan"></i>Telemetría en vivo</li>
+            <li><i class="tag-dot dot-green"></i>Escena 3D interactiva</li>
+            <li><i class="tag-dot dot-blue"></i>Ajuste científico</li>
+            <li><i class="tag-dot dot-orange"></i>Modo prueba sin hardware</li>
+          </ul>
         </div>
-        <div class="learn-hero-art" aria-hidden="true">
-          <div class="art-cap"><span>+</span><span>−</span></div>
-          <div class="art-formula">V<sub>C</sub>(t) = V<sub>f</sub> − (V<sub>f</sub> − V<sub>0</sub>) e<sup>−t/τ</sup></div>
+        <div class="cover-art" aria-hidden="true">
+          <svg viewBox="0 0 460 360" role="img" aria-label="Circuito RC conceptual: fuente, resistencia y banco de condensadores con trazado de carga y descarga">
+            <defs>
+              <linearGradient id="coverWire" x1="0" y1="0" x2="1" y2="0">
+                <stop offset="0" stop-color="#00C9D8"/><stop offset="0.5" stop-color="#BCEB00"/><stop offset="1" stop-color="#FF963D"/>
+              </linearGradient>
+              <radialGradient id="coverGlow" cx="0.5" cy="0.45" r="0.65">
+                <stop offset="0" stop-color="#00C9D8" stop-opacity="0.35"/><stop offset="1" stop-color="#00C9D8" stop-opacity="0"/>
+              </radialGradient>
+            </defs>
+            <rect x="10" y="10" width="440" height="340" rx="18" fill="#172832"/>
+            <rect x="10" y="10" width="440" height="340" rx="18" fill="url(#coverGlow)"/>
+            <circle cx="230" cy="150" r="110" fill="none" stroke="#00C9D8" stroke-opacity="0.25" stroke-width="1.5" stroke-dasharray="4 6"/>
+            <!-- Fuente -->
+            <line x1="70" y1="150" x2="70" y2="255" stroke="#00C9D8" stroke-width="3"/>
+            <line x1="48" y1="205" x2="92" y2="205" stroke="#EDF3F5" stroke-width="7" stroke-linecap="round"/>
+            <line x1="56" y1="225" x2="84" y2="225" stroke="#83939E" stroke-width="4" stroke-linecap="round"/>
+            <text x="70" y="278" fill="#83939E" font-size="12" text-anchor="middle" font-weight="700">Fuente</text>
+            <text x="70" y="150" fill="#BCEB00" font-size="20" text-anchor="middle" font-weight="800">+</text>
+            <!-- Resistencia (zigzag) -->
+            <polyline points="70,96 92,96 100,78 116,114 132,78 148,114 164,78 180,114 196,78 212,114 220,96 250,96"
+              fill="none" stroke="url(#coverWire)" stroke-width="4" stroke-linejoin="round" stroke-linecap="round"/>
+            <text x="145" y="60" fill="#00C9D8" font-size="13" text-anchor="middle" font-weight="700">R = 4700 Ω</text>
+            <!-- Banco de condensadores -->
+            <line x1="250" y1="96" x2="250" y2="70" stroke="#83939E" stroke-width="3"/>
+            <g stroke="#EDF3F5" stroke-width="4" stroke-linecap="round">
+              <line x1="226" y1="70" x2="274" y2="70"/>
+              <line x1="226" y1="54" x2="274" y2="54"/>
+            </g>
+            <text x="250" y="40" fill="#EDF3F5" font-size="12" text-anchor="middle" font-weight="700">Banco 4 × 1000 µF</text>
+            <!-- Retorno -->
+            <polyline points="250,70 330,70 330,150 330,205 250,205" fill="none" stroke="#83939E" stroke-width="3" stroke-dasharray="2 6" stroke-linejoin="round"/>
+            <line x1="70" y1="255" x2="70" y2="205" stroke="#83939E" stroke-width="3"/>
+            <line x1="70" y1="205" x2="250" y2="205" stroke="#83939E" stroke-width="3"/>
+            <!-- Curva RC -->
+            <path d="M 60 320 L 60 296 C 110 296 120 250 170 246 C 220 242 250 236 400 232"
+              fill="none" stroke="#BCEB00" stroke-width="3.5" stroke-linecap="round"/>
+            <path d="M 60 296 L 400 296" fill="none" stroke="#33454F" stroke-width="1.2" stroke-dasharray="4 5"/>
+            <text x="392" y="226" fill="#BCEB00" font-size="11" text-anchor="end" font-weight="700">V<tspan dy="3" font-size="8">C</tspan>(t)</text>
+            <!-- τ marker -->
+            <circle cx="170" cy="246" r="5" fill="#FF963D"/>
+            <text x="170" y="268" fill="#FF963D" font-size="11" text-anchor="middle" font-weight="800">63,2 %</text>
+          </svg>
         </div>
       </div>
 
-      <div class="learn-grid">
-        <article class="learn-card">
-          <span class="learn-index">A</span>
-          <h2>¿Qué es RC LAB 3D?</h2>
-          <p>Es un laboratorio interactivo para observar el comportamiento de un banco de condensadores. El montaje real se conecta por USB; la escena 3D y las gráficas se alimentan de la misma telemetría validada.</p>
-        </article>
-        <article class="learn-card">
-          <span class="learn-index">B</span>
-          <h2>Objetivo experimental</h2>
-          <p>Registrar la evolución del voltaje durante la carga y la descarga, identificar la constante de tiempo τ, comparar el valor experimental con el teórico y explicar las diferencias sin forzar los datos.</p>
-        </article>
-        <article class="learn-card learn-card-wide">
-          <span class="learn-index">C</span>
-          <h2>Componentes y función</h2>
-          <ul class="component-list">
-            <li><strong>Arduino Uno:</strong> adquiere A0 y A1, controla el PWM de D9 y gestiona los LEDs.</li>
-            <li><strong>Banco de 4 × 1000 µF:</strong> almacena la carga. En paralelo, la capacitancia equivalente nominal es 0,004 F.</li>
-            <li><strong>Potenciómetro 50 kΩ:</strong> selecciona el voltaje techo de referencia. No cambia físicamente la capacitancia.</li>
-            <li><strong>LM358:</strong> seguidor de tensión para acondicionar la señal de medición.</li>
-            <li><strong>Resistencia de carga 4,7 kΩ:</strong> limita la corriente de carga. La resistencia efectiva de descarga debe verificarse por separado.</li>
-            <li><strong>MOSFET IRLZ44N:</strong> recibe la señal PWM de D9. La topología exacta de descarga está pendiente de verificación física.</li>
-            <li><strong>Pulsador D7:</strong> inicia la secuencia de descarga con antirrebote por software.</li>
-            <li><strong>LEDs D2, D3, D4:</strong> indican el 30 %, 60 % y 90 % del voltaje techo.</li>
-            <li><strong>Protoboard y divisor 1 MΩ / 470 kΩ:</strong> soporte físico y reducción de la tensión medida a un rango seguro para A0.</li>
-          </ul>
-        </article>
-        <article class="learn-card learn-card-wide">
-          <span class="learn-index">D</span>
-          <h2>Fundamento teórico mínimo</h2>
-          <div class="concept-grid">
-            <div><h3>Capacitancia</h3><p>Relación entre carga y voltaje: C = Q / V. Se mide en faradios (F).</p></div>
-            <div><h3>Carga eléctrica</h3><p>Q = C · V. Al aumentar el voltaje, el condensador acumula más carga.</p></div>
-            <div><h3>Energía</h3><p>E = ½ · C · V². Crece con el cuadrado del voltaje, no de forma lineal.</p></div>
-            <div><h3>Constante de tiempo</h3><p>τ = R · C. Indica cuánto tarda el sistema en recorrer el 63,2 % de la variación.</p></div>
-            <div><h3>Carga</h3><p>V<sub>C</sub>(t) = V<sub>f</sub> − (V<sub>f</sub> − V<sub>0</sub>) · e<sup>−t/τ</sup>.</p></div>
-            <div><h3>Descarga</h3><p>V<sub>C</sub>(t) = V<sub>f</sub> + (V<sub>0</sub> − V<sub>f</sub>) · e<sup>−t/τ</sup>. V<sub>f</sub> se mide; no se supone cero.</p></div>
-          </div>
-        </article>
-        <article class="learn-card">
-          <span class="learn-index">E</span>
-          <h2>Funcionamiento del montaje</h2>
-          <p>El potenciómetro fija un voltaje techo. El Arduino mide el voltaje del banco en A0 y el techo en A1. Los LEDs comparan el voltaje medido con porcentajes del techo. Al pulsar D7 se inicia una rampa PWM 255 → 0 sobre el MOSFET; la telemetría continúa durante la rampa.</p>
-          <p class="learn-warning">La topología exacta de carga y descarga no está verificada en esta sesión. La escena 3D es un esquema conceptual y no afirma conexiones no comprobadas.</p>
-        </article>
-        <article class="learn-card">
-          <span class="learn-index">F</span>
-          <h2>Cómo utilizar el laboratorio</h2>
-          <ol class="steps">
-            <li>Conecta el Arduino por USB.</li>
-            <li>Selecciona el puerto COM y pulsa «Conectar Arduino».</li>
-            <li>Espera a que llegue una trama válida; el estado cambiará a «Transmitiendo».</li>
-            <li>Inicia una sesión para guardar las muestras.</li>
-            <li>Observa el condensador y la gráfica en vivo.</li>
-            <li>Analiza la carga y la descarga en «Análisis científico».</li>
-            <li>Interpreta τ y revisa las advertencias.</li>
-            <li>Detén la sesión y exporta CSV o JSON.</li>
-          </ol>
-        </article>
-        <article class="learn-card">
-          <span class="learn-index">G</span>
-          <h2>Interpretación de resultados</h2>
-          <p><strong>63,2 %:</strong> en un τ de carga, el voltaje ha recorrido el 63,212 % de la variación total. <strong>36,8 %:</strong> en un τ de descarga queda el 36,788 % de la variación inicial respecto al nivel final.</p>
-          <p>El tau experimental se obtiene interpolando el cruce del umbral entre dos muestras consecutivas. Si el umbral no se alcanza, no se inventa un resultado.</p>
-        </article>
-        <article class="learn-card">
-          <span class="learn-index">H</span>
-          <h2>Seguridad</h2>
-          <ul class="safety-list">
-            <li>No superes el rango seguro de A0. Con divisor 1 MΩ / 470 kΩ y ADC de 5 V, el máximo medible es 15,64 V, pero eso no autoriza aplicar esa tensión.</li>
-            <li>Respeta la polaridad de los condensadores electrolíticos.</li>
-            <li>No cambies conexiones con el circuito energizado.</li>
-            <li>Verifica la ruta de descarga antes de manipular el montaje.</li>
-            <li>La referencia de 5 V del ADC es una hipótesis de cálculo, no una calibración certificada.</li>
-          </ul>
-        </article>
-        <article class="learn-card learn-card-wide">
-          <span class="learn-index">I</span>
-          <h2>Preguntas frecuentes</h2>
-          <div class="faq">
-            <details><summary>¿Qué significa τ?</summary><p>Es la constante de tiempo R · C. En un intervalo τ el sistema recorre el 63,2 % de la variación hacia el nuevo equilibrio.</p></details>
-            <details><summary>¿Por qué se alcanza el 63,2 %?</summary><p>Porque 1 − e<sup>−1</sup> = 0,6321205588. Es una propiedad matemática de la exponencial, no un valor ajustable.</p></details>
-            <details><summary>¿Qué significa el 36,8 % de descarga?</summary><p>Tras un τ de descarga queda e<sup>−1</sup> = 0,3678794412 de la variación inicial respecto al nivel final.</p></details>
-            <details><summary>¿Cuál es la función del potenciómetro?</summary><p>Seleccionar el voltaje techo de referencia. No modifica la capacitancia del banco.</p></details>
-            <details><summary>¿Qué pasa si cambia la capacitancia?</summary><p>Si C aumenta, τ = R · C aumenta y el proceso se vuelve más lento para la misma resistencia.</p></details>
-            <details><summary>¿Cómo influye la resistencia?</summary><p>Una R mayor reduce la corriente y aumenta τ. La resistencia de descarga puede ser distinta de la de carga.</p></details>
-            <details><summary>¿Por qué tau teórico y experimental pueden diferir?</summary><p>Por tolerancias de R y C, caída del divisor, cuantización del ADC, tiempos de muestreo, resistencia efectiva no verificada y el control activo con MOSFET.</p></details>
-          </div>
-        </article>
+      <!-- El montaje -->
+      <div class="learn-section">
+        <div class="learn-head centered">
+          <span class="section-kicker kicker-cyan">El montaje</span>
+          <h2>Ocho piezas, un solo principio: almacenar energía y liberarla</h2>
+          <p>Cada componente tiene un papel concreto en la medición o en el control. La topología de descarga se verifica en el montaje real.</p>
+        </div>
+        <div class="component-grid">
+          <article class="mount-card tone-cyan">
+            <div class="mount-icon" aria-hidden="true"><svg viewBox="0 0 48 48"><rect x="6" y="12" width="36" height="24" rx="3" fill="none" stroke="currentColor" stroke-width="2.4"/><path d="M14 18h6M14 24h6M14 30h6" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/><circle cx="36" cy="24" r="2.4" fill="currentColor"/></svg></div>
+            <h3>Arduino Uno</h3><p>Adquiere A0 (tanque) y A1 (techo), genera el PWM de D9 y gestiona los LEDs D2–D4.</p>
+          </article>
+          <article class="mount-card tone-green">
+            <div class="mount-icon" aria-hidden="true"><svg viewBox="0 0 48 48"><rect x="10" y="8" width="28" height="32" rx="4" fill="none" stroke="currentColor" stroke-width="2.4"/><path d="M19 16v16M29 16v16" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/><path d="M12 14h24" stroke="currentColor" stroke-width="2" opacity="0.5"/></svg></div>
+            <h3>Banco 4 × 1000 µF</h3><p>Almacena la carga en paralelo. C<sub>eq</sub> nominal = 0,004 F. Núcleo interno visible en el modelo 3D.</p>
+          </article>
+          <article class="mount-card tone-blue">
+            <div class="mount-icon" aria-hidden="true"><svg viewBox="0 0 48 48"><path d="M6 28h8l4-10 6 16 6-16 6 16 4-10h8" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round"/></svg></div>
+            <h3>Resistencia 4,7 kΩ</h3><p>Limita la corriente de carga; fija τ = R·C = 18,8 s junto al banco.</p>
+          </article>
+          <article class="mount-card tone-orange">
+            <div class="mount-icon" aria-hidden="true"><svg viewBox="0 0 48 48"><circle cx="24" cy="24" r="13" fill="none" stroke="currentColor" stroke-width="2.4"/><line x1="24" y1="4" x2="24" y2="12" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/><circle cx="24" cy="24" r="3.4" fill="currentColor"/></svg></div>
+            <h3>Potenciómetro 50 kΩ</h3><p>Selecciona el voltaje techo de referencia. No modifica la capacitancia.</p>
+          </article>
+          <article class="mount-card tone-cyan">
+            <div class="mount-icon" aria-hidden="true"><svg viewBox="0 0 48 48"><path d="M8 30h10l5-12 6 18 6-18 5 12h6" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round"/></svg></div>
+            <h3>LM358</h3><p>Seguidor de tensión: acondiciona la señal de medición sin cargar el divisor.</p>
+          </article>
+          <article class="mount-card tone-blue">
+            <div class="mount-icon" aria-hidden="true"><svg viewBox="0 0 48 48"><rect x="14" y="10" width="20" height="28" rx="2.5" fill="none" stroke="currentColor" stroke-width="2.4"/><path d="M24 4v6M20 4h8" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/><path d="M20 22h8M24 18v8" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg></div>
+            <h3>MOSFET IRLZ44N</h3><p>Recibirá la señal PWM de D9 para la descarga. Topología por verificar físicamente.</p>
+          </article>
+          <article class="mount-card tone-orange">
+            <div class="mount-icon" aria-hidden="true"><svg viewBox="0 0 48 48"><circle cx="24" cy="18" r="8" fill="none" stroke="currentColor" stroke-width="2.4"/><path d="M14 40c3-7 9-10 10-10s7 3 10 10" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg></div>
+            <h3>Pulsador D7</h3><p>Inicia la secuencia de descarga con antirrebote por software.</p>
+          </article>
+          <article class="mount-card tone-green">
+            <div class="mount-icon" aria-hidden="true"><svg viewBox="0 0 48 48"><path d="M16 34V22a8 8 0 0 1 16 0v12" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linejoin="round"/><path d="M20 20h8M24 16v8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M12 40h24" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg></div>
+            <h3>LEDs D2 · D3 · D4</h3><p>Indican 30 %, 60 % y 90 % del voltaje techo. Se encienden en cascada.</p>
+          </article>
+        </div>
+        <p class="learn-note">Divisor resistivo 1 MΩ / 470 kΩ: reduce el voltaje del banco a un rango seguro para A0. Su tolerancia condiciona la reconstrucción V<sub>tanque</sub> = V<sub>A0</sub> × (1470 / 470).</p>
+      </div>
+
+      <!-- Fundamento científico -->
+      <div class="learn-section">
+        <div class="learn-head centered">
+          <span class="section-kicker kicker-green">Fundamento científico</span>
+          <h2>Seis ideas para leer las gráficas</h2>
+          <p>Sin fórmulas avanzadas: la exponencial, un porcentaje y una constante.</p>
+        </div>
+        <div class="science-grid">
+          <article class="science-card accent-cyan">
+            <span class="science-num">01</span>
+            <h3>¿Qué es un circuito RC?</h3>
+            <p>Una resistencia y un condensador conectados en el mismo lazo. Al cambiar la fuente, el condensador no responde de golpe: lo hace de forma <strong>exponencial</strong>.</p>
+            <div class="formula">R — C<span>Lazo único, respuesta exponencial</span></div>
+          </article>
+          <article class="science-card accent-blue">
+            <span class="science-num">02</span>
+            <h3>¿Qué es la capacitancia?</h3>
+            <p>La "capacidad de almacenamiento" de carga eléctrica del banco. Cuánta carga acumula por voltio.</p>
+            <div class="formula">C = Q / V<span>F = culombios / voltio</span></div>
+          </article>
+          <article class="science-card accent-green">
+            <span class="science-num">03</span>
+            <h3>Cómo ocurre la carga</h3>
+            <p>El banco parte de un nivel y se aproxima al techo sin alcanzarlo en tiempo finito. El ritmo decae a medida que el voltaje sube.</p>
+            <div class="formula">V<sub>C</sub>(t) = V<sub>f</sub> − (V<sub>f</sub> − V<sub>0</sub>)·e<sup>−t/τ</sup><span>Asíntota = V<sub>f</sub></span></div>
+          </article>
+          <article class="science-card accent-orange">
+            <span class="science-num">04</span>
+            <h3>Cómo ocurre la descarga</h3>
+            <p>El banco cede su energía al circuito. El voltaje cae con la misma exponencial, hacia el nivel final medido.</p>
+            <div class="formula">V<sub>C</sub>(t) = V<sub>f</sub> + (V<sub>0</sub> − V<sub>f</sub>)·e<sup>−t/τ</sup><span>V<sub>f</sub> se mide; no se supone cero</span></div>
+          </article>
+          <article class="science-card accent-cyan">
+            <span class="science-num">05</span>
+            <h3>¿Qué es τ?</h3>
+            <p>El tiempo que tarda el sistema en recorrer el 63,2 % de la variación total. Depende solo de R y C: nada más.</p>
+            <div class="formula">τ = R · C<span>18,8 s con 4,7 kΩ y 0,004 F</span></div>
+          </article>
+          <article class="science-card accent-green">
+            <span class="science-num">06</span>
+            <h3>63,2 % y 36,8 %</h3>
+            <p>Tras un τ en carga queda el 36,8 % por recorrer (63,2 % completado). Tras un τ en descarga permanece el 36,8 % de la carga inicial: no se ha descargado el 36,8 %, sino que esa fracción sigue almacenada. La carga práctica (≈ 99,3 %) exige <strong>5τ</strong>.</p>
+            <div class="formula">1 − e<sup>−1</sup> = 0,6321<span>e<sup>−1</sup> = 0,3679</span></div>
+          </article>
+        </div>
+      </div>
+
+      <!-- Recorrido del experimento -->
+      <div class="learn-section">
+        <div class="learn-head centered">
+          <span class="section-kicker kicker-orange">El recorrido</span>
+          <h2>De la protoboard a la pantalla, en seis pasos</h2>
+        </div>
+        <ol class="flow-steps">
+          <li class="flow-step step-1"><span class="flow-num">1</span><div><h3>Montaje físico</h3><p>Banco, resistencia, divisor y controlador sobre protoboard.</p></div></li>
+          <li class="flow-step step-2"><span class="flow-num">2</span><div><h3>Arduino Uno</h3><p>Firmware R1 · 9600 baudios · enteros seguros.</p></div></li>
+          <li class="flow-step step-3"><span class="flow-num">3</span><div><h3>Adquisición</h3><p>A0 y A1 con mediana móvil; cada muestra lleva millis().</p></div></li>
+          <li class="flow-step step-4"><span class="flow-num">4</span><div><h3>Visualización 3D</h3><p>El banco se ilumina, el núcleo crece y el aura acompaña.</p></div></li>
+          <li class="flow-step step-5"><span class="flow-num">5</span><div><h3>Gráficas</h3><p>V(t), modelo RC e intersección en 1τ interpolada.</p></div></li>
+          <li class="flow-step step-6"><span class="flow-num">6</span><div><h3>Resultados</h3><p>τ experimental, RMSE, R² y advertencias explícitas.</p></div></li>
+        </ol>
+      </div>
+
+      <!-- CTA final -->
+      <div class="learn-cta panel">
+        <div>
+          <h2>¿Listo para observar la energía?</h2>
+          <p>Primero declara los componentes en «Configurar circuito»; después conecta el Arduino o usa el Modo prueba para recorrer carga, descarga, τ y exportación.</p>
+        </div>
+        <div class="learn-cta-actions">
+          <button class="btn btn-cover btn-cover-secondary js-config" id="btn-cover-config-2">CONFIGURAR CIRCUITO</button>
+          <button class="btn btn-cover js-enter-lab" id="btn-enter-lab">ENTRAR AL LABORATORIO <span aria-hidden="true">→</span></button>
+        </div>
       </div>
     </section>
 
@@ -531,11 +1123,15 @@
 
   <script src="js/core.js" defer></script>
   <script src="js/api.js" defer></script>
+  <script src="js/navigation.js" defer></script>
   <script src="js/store.js" defer></script>
+  <script src="js/circuit-config.js" defer></script>
   <script src="js/circuit3d.js" defer></script>
   <script src="js/charts.js" defer></script>
+  <script src="js/calc.js" defer></script>
   <script src="js/analysis.js" defer></script>
   <script src="js/simulator.js" defer></script>
+  <script src="js/testmode.js" defer></script>
   <script src="js/app.js" defer></script>
 </body>
 </html>

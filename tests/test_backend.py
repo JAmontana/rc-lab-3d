@@ -318,6 +318,49 @@ def test_websocket_envia_estado_y_responde_ping(isolated_app):
             assert status["protocol"]["actual"] == "R1"
 
 
+def test_health_y_favicon_responden(isolated_app):
+    client = TestClient(isolated_app.app)
+    health = client.get("/health")
+    assert health.status_code == 200
+    payload = health.json()
+    assert payload["status"] == "ok"
+    assert payload["serial_connected"] is False
+    assert payload["session_active"] is False
+
+    favicon = client.get("/favicon.ico")
+    assert favicon.status_code == 200
+    assert favicon.headers["content-type"].startswith("image/svg+xml")
+    assert b"<svg" in favicon.content
+
+
+def test_plan_de_modo_test_y_escenarios(isolated_app):
+    client = TestClient(isolated_app.app)
+    start = client.post(
+        "/api/synthetic/start",
+        json={
+            "scenario": "carga",
+            "voltaje_techo_v": 3.0,
+            "speed": 12.0,
+            "r_ohm": 500.0,
+            "c_farad": 0.002,
+        },
+    )
+    assert start.status_code == 200
+    payload = start.json()
+    plan = payload["plan"]
+    assert plan["scenario"] == "carga"
+    assert plan["phases"] == ["C"]
+    assert plan["ceiling_v"] == pytest.approx(3.0)
+    assert plan["tau_s"] == pytest.approx(1.0)
+    assert plan["speed"] == pytest.approx(12.0)
+    assert payload["serial"]["is_synthetic"] is True
+
+    invalid = client.post("/api/synthetic/start", json={"scenario": "inventado"})
+    assert invalid.status_code == 422
+    client.post("/api/synthetic/stop")
+
+
+
 def test_diagnostico_incluye_firmware(isolated_app):
     client = TestClient(isolated_app.app)
     response = client.get("/api/diagnostics")

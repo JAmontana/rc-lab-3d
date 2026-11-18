@@ -1,3 +1,11 @@
+# Secretos y credenciales (nunca subir al repositorio)
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+
 # Entornos virtuales y cachés de Python
 .venv/
 venv/
@@ -24,3 +32,6 @@ data_sessions/*.part
 
 # Mapas de depuración de dependencias locales
 frontend/js/vendor/*.map
+
+# Binario opcional del túnel público (se descarga con publicar.ps1 -Descargar)
+tools/cloudflared.exe

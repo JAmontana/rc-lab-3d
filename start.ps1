@@ -27,7 +27,7 @@ Write-Section "RC LAB 3D - Inicio de la aplicacion"
 # 1. Python base
 $basePython = Get-Command python -ErrorAction SilentlyContinue
 if (-not $basePython) {
-    Write-Err "Python no esta instalado o no esta en el PATH. Instale Python 3.10+ y reintente."
+    Write-Err "Python no esta instalado o no esta en el PATH. Instale Python 3.12+ y reintente."
     exit 1
 }
 Write-Ok "Python base: $(& python --version 2>&1)"
@@ -44,20 +44,26 @@ if (-not (Test-Path $venvPython)) {
     Write-Ok "Entorno virtual creado."
 }
 
-# 3. Dependencias
-Write-Host "Verificando dependencias de requirements.txt ..." -ForegroundColor Cyan
-& $venvPython -m pip install --disable-pip-version-check -q -r requirements.txt
-if ($LASTEXITCODE -ne 0) {
-    Write-Err "No se pudieron instalar las dependencias. Revise su conexion o ejecute:"
-    Write-Host "  $venvPython -m pip install -r requirements.txt" -ForegroundColor Gray
-    exit 1
-}
+# 3. Dependencias: solo se instalan si falta alguna
+Write-Host "Verificando dependencias..." -ForegroundColor Cyan
 & $venvPython -c "import fastapi, uvicorn, serial, numpy, scipy, pydantic" 2>$null
-if ($LASTEXITCODE -ne 0) {
-    Write-Err "Las dependencias no se importan correctamente dentro de .venv."
-    exit 1
+if ($LASTEXITCODE -eq 0) {
+    Write-Ok "Dependencias disponibles en .venv (sin reinstalar)."
+} else {
+    Write-Host "Instalando dependencias de requirements.txt ..." -ForegroundColor Cyan
+    & $venvPython -m pip install --disable-pip-version-check -q -r requirements.txt
+    if ($LASTEXITCODE -ne 0) {
+        Write-Err "No se pudieron instalar las dependencias. Revise su conexion o ejecute:"
+        Write-Host "  $venvPython -m pip install -r requirements.txt" -ForegroundColor Gray
+        exit 1
+    }
+    & $venvPython -c "import fastapi, uvicorn, serial, numpy, scipy, pydantic" 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Err "Las dependencias no se importan correctamente dentro de .venv."
+        exit 1
+    }
+    Write-Ok "Dependencias instaladas en .venv."
 }
-Write-Ok "Dependencias disponibles en .venv."
 
 # 4. Puerto libre
 $listener = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue
@@ -78,8 +84,8 @@ Write-Host "  WebSocket:   ws://127.0.0.1:$port/ws/live" -ForegroundColor Gray
 Write-Host "--------------------------------------------------------------" -ForegroundColor Cyan
 Write-Host "  1. Abra la aplicacion en el navegador." -ForegroundColor Gray
 Write-Host "  2. Conecte el Arduino Uno por USB (firmware R1, 9600 baudios)." -ForegroundColor Gray
-Write-Host "     Seleccione el puerto COM y pulse 'Conectar USB'." -ForegroundColor Gray
-Write-Host "  3. Sin hardware, use 'Modo Test' (datos SIMULACION)." -ForegroundColor Gray
+Write-Host "     Seleccione el puerto COM y pulse 'Conectar Arduino'." -ForegroundColor Gray
+Write-Host "  3. Sin hardware, use 'Modo prueba' (datos SIMULACION)." -ForegroundColor Gray
 Write-Host ""
 Write-Host "Ctrl+C detiene el servidor y libera el puerto serial." -ForegroundColor Yellow
 Write-Host ""
